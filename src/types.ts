@@ -36,9 +36,12 @@ export interface MetaLead {
   ad_id?: string;
   form_id?: string;
   campaign_name?: string;
+  adset_name?: string;
+  ad_name?: string;
   form_name?: string;
   created_time: string;
   synced_at?: string;
+  source?: string;
 }
 
 export interface MetaForm {

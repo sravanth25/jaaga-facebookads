@@ -1015,6 +1015,260 @@ router.post('/api/leads/sync-cron', handleSyncLeads);
 router.get('/leads/sync-cron', handleSyncLeads);
 router.get('/api/leads/sync-cron', handleSyncLeads);
 
+// GET & POST /leads/sync-sheet
+const handleSheetSync = async (req, res) => {
+  const expectedSecret = process.env.CRON_SECRET;
+  const providedSecret = req.query.secret;
+
+  if (expectedSecret && providedSecret !== expectedSecret) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid secret.' });
+  }
+
+  try {
+    const csvUrl = process.env.LEADS_SHEET_CSV_URL;
+    if (!csvUrl) {
+      return res.status(400).json({ error: 'LEADS_SHEET_CSV_URL environment variable is not configured.' });
+    }
+
+    const response = await fetch(csvUrl);
+    if (!response.ok) {
+      return res.status(500).json({ error: `Failed to fetch CSV from Google Sheet (HTTP ${response.status}: ${response.statusText}).` });
+    }
+
+    const csvText = await response.text();
+    const parseCsvText = (text) => {
+      const lines = [];
+      let currentRow = [];
+      let currentCell = '';
+      let inQuotes = false;
+
+      for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const nextChar = text[i + 1];
+
+        if (char === '"') {
+          if (inQuotes && nextChar === '"') {
+            currentCell += '"';
+            i++;
+          } else {
+            inQuotes = !inQuotes;
+          }
+        } else if (char === ',' && !inQuotes) {
+          currentRow.push(currentCell.trim());
+          currentCell = '';
+        } else if ((char === '\r' || char === '\n') && !inQuotes) {
+          if (char === '\r' && nextChar === '\n') {
+            i++;
+          }
+          currentRow.push(currentCell.trim());
+          if (currentRow.some((cell) => cell.length > 0)) {
+            lines.push(currentRow);
+          }
+          currentRow = [];
+          currentCell = '';
+        } else {
+          currentCell += char;
+        }
+      }
+
+      if (currentCell || currentRow.length > 0) {
+        currentRow.push(currentCell.trim());
+        if (currentRow.some((cell) => cell.length > 0)) {
+          lines.push(currentRow);
+        }
+      }
+
+      if (lines.length === 0) return { headers: [], rows: [] };
+      return { headers: lines[0].map((h) => h.trim()), rows: lines.slice(1) };
+    };
+
+    const { headers, rows } = parseCsvText(csvText);
+    if (headers.length === 0 || rows.length === 0) {
+      return res.json({ imported: 0, updated: 0, skipped: 0, total: 0, message: 'CSV is empty.' });
+    }
+
+    const colIndexMap = {};
+    headers.forEach((h, idx) => {
+      const key = h.trim().toLowerCase().replace(/[\s_]+/g, '');
+      colIndexMap[key] = idx;
+    });
+
+    const getCol = (row, ...keys) => {
+      for (const k of keys) {
+        const normK = k.trim().toLowerCase().replace(/[\s_]+/g, '');
+        const idx = colIndexMap[normK];
+        if (idx !== undefined && row[idx] !== undefined && row[idx] !== null) {
+          return row[idx].trim();
+        }
+      }
+      return '';
+    };
+
+    const stripPrefix = (val, prefix) => {
+      if (!val) return '';
+      const str = String(val).trim();
+      if (str.toLowerCase().startsWith(prefix.toLowerCase())) {
+        return str.substring(prefix.length).trim();
+      }
+      return str;
+    };
+
+    const normalizePhone = (raw) => {
+      if (!raw) return '';
+      let str = String(raw).trim();
+      if (str.toLowerCase().startsWith('p:')) {
+        str = str.substring(2).trim();
+      }
+      let cleaned = str.replace(/\D/g, '');
+      if (/^0\d{10}$/.test(cleaned)) cleaned = cleaned.substring(1);
+      if (/^\d{10}$/.test(cleaned)) cleaned = '91' + cleaned;
+      return cleaned;
+    };
+
+    const crypto = await import('crypto');
+    const generateId = (phone, email, dateStr) => {
+      const key = `${(phone || '').trim().toLowerCase()}|${(email || '').trim().toLowerCase()}|${(dateStr || '').trim().toLowerCase()}`;
+      const hash = crypto.createHash('sha256').update(key).digest('hex').substring(0, 24);
+      return `sheet_${hash}`;
+    };
+
+    let imported = 0;
+    let updated = 0;
+    let skipped = 0;
+
+    for (const row of rows) {
+      if (!row || row.length === 0 || row.every((c) => !c || c.trim() === '')) {
+        skipped++;
+        continue;
+      }
+
+      const rawId = getCol(row, 'id');
+      const rawCreatedTime = getCol(row, 'created_time', 'createdtime', 'date', 'timestamp');
+      const rawAdId = getCol(row, 'ad_id', 'adid');
+      const adName = getCol(row, 'ad_name', 'adname');
+      const rawAdsetId = getCol(row, 'adset_id', 'adsetid');
+      const adsetName = getCol(row, 'adset_name', 'adsetname');
+      const rawCampaignId = getCol(row, 'campaign_id', 'campaignid');
+      const campaignName = getCol(row, 'campaign_name', 'campaignname');
+      const rawFormId = getCol(row, 'form_id', 'formid');
+      const formName = getCol(row, 'form_name', 'formname');
+      const isOrganic = getCol(row, 'is_organic', 'isorganic');
+      const platform = getCol(row, 'platform');
+      const fullName = getCol(row, 'full_name', 'fullname', 'name');
+      const rawPhone = getCol(row, 'phone', 'phonenumber', 'mobile', 'contact');
+      const rawEmail = getCol(row, 'email', 'e-mail');
+      const state = getCol(row, 'state');
+      const city = getCol(row, 'city');
+      const leadStatus = getCol(row, 'lead_status', 'leadstatus', 'status');
+      const remarks = getCol(row, 'remarks');
+
+      const leadIdFromCol = stripPrefix(rawId, 'l:');
+      const phone = normalizePhone(rawPhone);
+      const campaignId = stripPrefix(rawCampaignId, 'c:');
+      const adId = stripPrefix(rawAdId, 'ag:');
+      const adsetId = stripPrefix(rawAdsetId, 'as:');
+      const formId = stripPrefix(rawFormId, 'f:');
+      const email = rawEmail ? rawEmail.trim() : '';
+
+      const finalLeadId = leadIdFromCol || generateId(phone, email, rawCreatedTime);
+
+      if (!fullName && !phone && !email && !leadIdFromCol) {
+        skipped++;
+        continue;
+      }
+
+      let createdTime = new Date().toISOString();
+      if (rawCreatedTime) {
+        const parsed = new Date(rawCreatedTime);
+        if (!isNaN(parsed.getTime())) createdTime = parsed.toISOString();
+        else createdTime = rawCreatedTime;
+      }
+
+      const fieldData = [];
+      if (fullName) fieldData.push({ name: 'full_name', values: [fullName] });
+      if (phone) fieldData.push({ name: 'phone', values: [phone] });
+      if (email) fieldData.push({ name: 'email', values: [email] });
+      if (state) fieldData.push({ name: 'state', values: [state] });
+      if (city) fieldData.push({ name: 'city', values: [city] });
+      if (leadStatus) fieldData.push({ name: 'lead_status', values: [leadStatus] });
+      if (remarks) fieldData.push({ name: 'Remarks', values: [remarks] });
+      if (platform) fieldData.push({ name: 'platform', values: [platform] });
+      if (isOrganic) fieldData.push({ name: 'is_organic', values: [isOrganic] });
+
+      try {
+        const db = getSupabase();
+        let status = 'imported';
+        const leadObj = {
+          id: finalLeadId,
+          full_name: fullName || 'Anonymous',
+          phone: phone || '—',
+          email: email || '—',
+          campaign_id: campaignId,
+          campaign_name: campaignName,
+          adset_id: adsetId,
+          adset_name: adsetName,
+          ad_id: adId,
+          ad_name: adName,
+          form_id: formId,
+          form_name: formName,
+          field_data: fieldData,
+          created_time: createdTime,
+          source: 'sheet',
+          synced_at: new Date().toISOString(),
+        };
+
+        if (db) {
+          const { data: existing } = await db.from('meta_leads').select('id').eq('id', finalLeadId).single();
+          if (existing) status = 'updated';
+
+          const { error } = await db.from('meta_leads').upsert({
+            id: leadObj.id,
+            full_name: leadObj.full_name,
+            phone: leadObj.phone,
+            email: leadObj.email,
+            field_data: leadObj.field_data,
+            campaign_id: leadObj.campaign_id,
+            campaign_name: leadObj.campaign_name,
+            adset_id: leadObj.adset_id,
+            adset_name: leadObj.adset_name,
+            ad_id: leadObj.ad_id,
+            ad_name: leadObj.ad_name,
+            form_id: leadObj.form_id,
+            form_name: leadObj.form_name,
+            created_time: leadObj.created_time,
+            source: leadObj.source,
+            synced_at: leadObj.synced_at,
+          }, { onConflict: 'id' });
+
+          if (error) inMemoryStore.leads.set(finalLeadId, leadObj);
+        } else {
+          if (inMemoryStore.leads.has(finalLeadId)) status = 'updated';
+          inMemoryStore.leads.set(finalLeadId, leadObj);
+        }
+
+        if (status === 'imported') imported++;
+        else updated++;
+      } catch (e) {
+        skipped++;
+      }
+    }
+
+    const total = imported + updated + skipped;
+    return res.json({
+      imported,
+      updated,
+      skipped,
+      total,
+      message: `Successfully processed ${rows.length} rows: ${imported} imported, ${updated} updated, ${skipped} skipped.`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message || 'Failed to sync leads from Google Sheet.' });
+  }
+};
+
+router.get(['/leads/sync-sheet', '/api/leads/sync-sheet'], handleSheetSync);
+router.post(['/leads/sync-sheet', '/api/leads/sync-sheet'], handleSheetSync);
+
 // GET /forms
 router.get(['/forms', '/api/forms'], async (req, res) => {
   try {
@@ -1062,6 +1316,8 @@ router.get(['/settings', '/api/settings'], (req, res) => {
       verifyToken: config.verifyToken || 'Not set',
       hasToken: !!process.env.META_ACCESS_TOKEN,
       hasSupabase: !!process.env.SUPABASE_URL,
+      cronSecret: process.env.CRON_SECRET || '',
+      hasSheetUrl: !!process.env.LEADS_SHEET_CSV_URL,
       appUrl,
     });
   } catch (err) {

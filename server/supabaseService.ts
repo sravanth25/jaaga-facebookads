@@ -54,18 +54,26 @@ export function parseFieldData(fieldData: Array<{ name: string; values: string[]
 /**
  * Upsert lead into Supabase or fallback store
  */
-export async function upsertLead(lead: MetaLead): Promise<void> {
+export async function upsertLead(lead: MetaLead): Promise<{ status: 'imported' | 'updated' }> {
   const parsed = parseFieldData(lead.field_data as any);
   const leadData: MetaLead = {
     ...lead,
     full_name: lead.full_name || parsed.full_name || 'Anonymous',
     phone: lead.phone || parsed.phone || '—',
     email: lead.email || parsed.email || '—',
+    source: lead.source || 'meta',
     synced_at: new Date().toISOString(),
   };
 
   const db = getSupabase();
+  let status: 'imported' | 'updated' = 'imported';
+
   if (db) {
+    const { data: existing } = await db.from('meta_leads').select('id').eq('id', leadData.id).single();
+    if (existing) {
+      status = 'updated';
+    }
+
     const { error } = await db.from('meta_leads').upsert({
       id: leadData.id,
       full_name: leadData.full_name,
@@ -73,21 +81,30 @@ export async function upsertLead(lead: MetaLead): Promise<void> {
       email: leadData.email,
       field_data: leadData.field_data,
       campaign_id: leadData.campaign_id,
+      campaign_name: leadData.campaign_name,
       adset_id: leadData.adset_id,
+      adset_name: leadData.adset_name,
       ad_id: leadData.ad_id,
+      ad_name: leadData.ad_name,
       form_id: leadData.form_id,
+      form_name: leadData.form_name,
       created_time: leadData.created_time,
+      source: leadData.source,
       synced_at: leadData.synced_at,
     }, { onConflict: 'id' });
 
     if (error) {
       console.error('Supabase upsert lead error:', error);
-      // Fallback to memory
       inMemoryStore.leads.set(leadData.id, leadData);
     }
   } else {
+    if (inMemoryStore.leads.has(leadData.id)) {
+      status = 'updated';
+    }
     inMemoryStore.leads.set(leadData.id, leadData);
   }
+
+  return { status };
 }
 
 /**

@@ -21,6 +21,7 @@ import {
   saveMetricView,
   hasSupabaseConfig,
 } from './supabaseService';
+import { syncSheetLeads } from './sheetService';
 import { getDatePresetBounds } from '../src/lib/formatters';
 import { METRIC_CATALOG, DEFAULT_OVERVIEW_METRICS } from '../src/lib/metrics';
 
@@ -574,6 +575,28 @@ apiRouter.post('/leads/sync-cron', handleLeadSync);
 apiRouter.get('/leads/sync-cron', handleLeadSync);
 
 // -------------------------------------------------------------
+// GET & POST /api/leads/sync-sheet
+// -------------------------------------------------------------
+const handleSheetSync = async (req: Request, res: Response) => {
+  const expectedSecret = process.env.CRON_SECRET;
+  const providedSecret = req.query.secret as string;
+
+  if (expectedSecret && providedSecret !== expectedSecret) {
+    return res.status(401).json({ error: 'Unauthorized: Invalid secret.' });
+  }
+
+  try {
+    const result = await syncSheetLeads();
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to sync leads from Google Sheet.' });
+  }
+};
+
+apiRouter.get('/leads/sync-sheet', handleSheetSync);
+apiRouter.post('/leads/sync-sheet', handleSheetSync);
+
+// -------------------------------------------------------------
 // GET /api/forms
 // -------------------------------------------------------------
 apiRouter.get('/forms', async (req: Request, res: Response) => {
@@ -628,6 +651,8 @@ apiRouter.get('/settings', (req: Request, res: Response) => {
     verifyToken: config.verifyToken || 'Not set',
     hasToken: !!process.env.META_ACCESS_TOKEN,
     hasSupabase: !!process.env.SUPABASE_URL,
+    cronSecret: process.env.CRON_SECRET || '',
+    hasSheetUrl: !!process.env.LEADS_SHEET_CSV_URL,
     appUrl,
   });
 });

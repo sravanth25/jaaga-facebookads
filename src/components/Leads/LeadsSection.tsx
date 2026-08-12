@@ -14,6 +14,7 @@ import {
   Megaphone,
   ChevronRight,
   Filter,
+  FileSpreadsheet,
 } from 'lucide-react';
 
 interface LeadsSectionProps {
@@ -46,6 +47,11 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
   searchQuery,
 }) => {
   const [activeLeadDrawer, setActiveLeadDrawer] = useState<MetaLead | null>(null);
+  const [isSheetSyncing, setIsSheetSyncing] = useState(false);
+  const [sheetSyncMessage, setSheetSyncMessage] = useState<{
+    type: 'success' | 'error';
+    text: string;
+  } | null>(null);
 
   const handleExportCSV = () => {
     const params = new URLSearchParams();
@@ -54,6 +60,50 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
     if (searchQuery) params.set('search', searchQuery);
 
     window.open(`/api/leads/export?${params.toString()}`, '_blank');
+  };
+
+  const handleSyncSheet = async () => {
+    setIsSheetSyncing(true);
+    setSheetSyncMessage(null);
+    try {
+      let secretParam = '';
+      try {
+        const sRes = await fetch('/api/settings');
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData.cronSecret) {
+            secretParam = `?secret=${encodeURIComponent(sData.cronSecret)}`;
+          }
+        }
+      } catch (e) {
+        // Ignore
+      }
+
+      const res = await fetch(`/api/leads/sync-sheet${secretParam}`);
+      const data = await res.json();
+
+      if (!res.ok || data.error) {
+        setSheetSyncMessage({
+          type: 'error',
+          text: data.error || 'Failed to sync leads from Google Sheet.',
+        });
+      } else {
+        setSheetSyncMessage({
+          type: 'success',
+          text: `Sheet Sync Result: ${data.imported ?? 0} imported, ${data.updated ?? 0} updated, ${data.skipped ?? 0} skipped (Total: ${data.total ?? 0}).`,
+        });
+        if (onSyncLeads) {
+          onSyncLeads();
+        }
+      }
+    } catch (err: any) {
+      setSheetSyncMessage({
+        type: 'error',
+        text: err.message || 'Error syncing leads from Google Sheet.',
+      });
+    } finally {
+      setIsSheetSyncing(false);
+    }
   };
 
   return (
@@ -108,14 +158,24 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
             </select>
           </div>
 
-          {/* Sync Leads Button */}
+          {/* Sync Meta Leads Button */}
           <button
             onClick={onSyncLeads}
-            disabled={isSyncing}
+            disabled={isSyncing || isSheetSyncing}
             className="flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 shadow-2xs transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`h-3.5 w-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
             <span>{isSyncing ? 'Syncing...' : 'Sync Leads'}</span>
+          </button>
+
+          {/* Sync from Sheet Button */}
+          <button
+            onClick={handleSyncSheet}
+            disabled={isSheetSyncing || isSyncing}
+            className="flex items-center gap-1.5 rounded-lg bg-blue-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-2xs transition-colors disabled:opacity-50"
+          >
+            <FileSpreadsheet className={`h-3.5 w-3.5 ${isSheetSyncing ? 'animate-spin' : ''}`} />
+            <span>{isSheetSyncing ? 'Syncing Sheet...' : 'Sync from Sheet'}</span>
           </button>
 
           {/* Export CSV Button */}
@@ -128,6 +188,25 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Sync Message Banner */}
+      {sheetSyncMessage && (
+        <div
+          className={`flex items-center justify-between p-3.5 rounded-xl border text-xs font-medium ${
+            sheetSyncMessage.type === 'success'
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200'
+              : 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-900 dark:text-rose-200'
+          }`}
+        >
+          <span>{sheetSyncMessage.text}</span>
+          <button
+            onClick={() => setSheetSyncMessage(null)}
+            className="p-1 hover:opacity-75"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Main Leads Table */}
       <div className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden shadow-2xs">
@@ -176,7 +255,14 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
                     className="hover:bg-slate-50/80 dark:hover:bg-slate-800/50 cursor-pointer transition-colors"
                   >
                     <td className="px-4 py-3.5 font-bold text-slate-900 dark:text-white">
-                      {lead.full_name || 'Anonymous'}
+                      <div className="flex items-center gap-2">
+                        <span>{lead.full_name || 'Anonymous'}</span>
+                        {lead.source === 'sheet' && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800">
+                            Sheet
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3.5 font-mono text-slate-600 dark:text-slate-300">
                       {lead.phone || '—'}
