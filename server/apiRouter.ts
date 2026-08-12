@@ -547,13 +547,24 @@ apiRouter.get('/forms', async (req: Request, res: Response) => {
 apiRouter.get('/settings', (req: Request, res: Response) => {
   const config = getMetaConfig();
   const host = req.get('host') || 'localhost:3000';
-  const protocol = req.protocol || 'http';
-  const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+  let protocol = req.protocol || 'http';
+  if (req.get('x-forwarded-proto')) {
+    protocol = req.get('x-forwarded-proto')!.split(',')[0].trim();
+  }
+  let appUrl = process.env.APP_URL;
+  if (!appUrl) {
+    appUrl = `${protocol}://${host}`;
+  }
+
+  let webhookUrl = `${appUrl}/api/meta/webhook`;
+  if (webhookUrl.startsWith('http://')) {
+    webhookUrl = webhookUrl.replace('http://', 'https://');
+  }
 
   res.json({
     adAccountId: config.adAccountId || 'Not set',
     pageId: config.pageId || 'Not set',
-    webhookUrl: `${appUrl}/api/meta/webhook`,
+    webhookUrl,
     verifyToken: config.verifyToken || 'Not set',
     hasToken: config.hasToken,
     hasSupabase: hasSupabaseConfig(),
@@ -584,14 +595,14 @@ apiRouter.get('/meta/webhook', (req: Request, res: Response) => {
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
 
-  const { verifyToken } = getMetaConfig();
+  const verifyToken = process.env.META_LEADGEN_VERIFY_TOKEN || getMetaConfig().verifyToken;
 
-  if (mode === 'subscribe' && token === verifyToken) {
+  if (mode === 'subscribe' && token && token === verifyToken) {
     console.log('Webhook verification successful.');
-    return res.status(200).send(challenge);
+    return res.status(200).send(String(challenge || ''));
   }
 
-  res.status(403).json({ error: 'Webhook verification token mismatch' });
+  res.status(403).send('Forbidden');
 });
 
 apiRouter.post('/meta/webhook', async (req: Request, res: Response) => {
@@ -600,7 +611,7 @@ apiRouter.post('/meta/webhook', async (req: Request, res: Response) => {
 
   try {
     const body = req.body;
-    if (body.object === 'page' && Array.isArray(body.entry)) {
+    if (body && body.object === 'page' && Array.isArray(body.entry)) {
       for (const entry of body.entry) {
         if (Array.isArray(entry.changes)) {
           for (const change of entry.changes) {
@@ -611,7 +622,7 @@ apiRouter.post('/meta/webhook', async (req: Request, res: Response) => {
               const lead = await getLeadById(leadgenId);
               if (lead) {
                 await upsertLead({
-                  id: lead.id,
+                  id: lead.id || leadgenId,
                   field_data: lead.field_data,
                   campaign_id: lead.campaign_id,
                   adset_id: lead.adset_id,

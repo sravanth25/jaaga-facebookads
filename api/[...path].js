@@ -1295,17 +1295,28 @@ router.get('/forms', async (req, res) => {
 });
 
 // GET /settings
-router.get('/settings', (req, res) => {
+router.get(['/settings', '/api/settings'], (req, res) => {
   try {
     const config = getMetaConfig();
     const host = req.get('host') || 'localhost:3000';
-    const protocol = req.protocol || 'http';
-    const appUrl = process.env.APP_URL || `${protocol}://${host}`;
+    let protocol = req.protocol || 'http';
+    if (req.get('x-forwarded-proto')) {
+      protocol = req.get('x-forwarded-proto').split(',')[0].trim();
+    }
+    let appUrl = process.env.APP_URL;
+    if (!appUrl) {
+      appUrl = `${protocol}://${host}`;
+    }
+
+    let webhookUrl = `${appUrl}/api/meta/webhook`;
+    if (webhookUrl.startsWith('http://')) {
+      webhookUrl = webhookUrl.replace('http://', 'https://');
+    }
 
     res.json({
       adAccountId: config.adAccountId || 'Not set',
       pageId: config.pageId || 'Not set',
-      webhookUrl: `${appUrl}/api/meta/webhook`,
+      webhookUrl,
       verifyToken: config.verifyToken || 'Not set',
       hasToken: config.hasToken,
       hasSupabase: hasSupabaseConfig(),
@@ -1317,7 +1328,7 @@ router.get('/settings', (req, res) => {
 });
 
 // GET /test-connection
-router.get('/test-connection', async (req, res) => {
+router.get(['/test-connection', '/api/test-connection'], async (req, res) => {
   try {
     const result = await testMetaConnection();
     res.json(result);
@@ -1330,23 +1341,24 @@ router.get('/test-connection', async (req, res) => {
 });
 
 // GET & POST /meta/webhook
-router.get('/meta/webhook', (req, res) => {
+const handleWebhookGet = (req, res) => {
   try {
     const mode = req.query['hub.mode'];
     const token = req.query['hub.verify_token'];
     const challenge = req.query['hub.challenge'];
-    const { verifyToken } = getMetaConfig();
+    const verifyToken = process.env.META_LEADGEN_VERIFY_TOKEN || getMetaConfig().verifyToken;
 
-    if (mode === 'subscribe' && token === verifyToken) {
-      return res.status(200).send(challenge);
+    if (mode === 'subscribe' && token && token === verifyToken) {
+      return res.status(200).send(String(challenge || ''));
     }
-    res.status(403).json({ error: 'Webhook verification token mismatch' });
+    return res.status(403).send('Forbidden');
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Webhook verification error' });
+    return res.status(500).send(err.message || 'Webhook verification error');
   }
-});
+};
 
-router.post('/meta/webhook', async (req, res) => {
+const handleWebhookPost = async (req, res) => {
+  // Always respond 200 fast
   res.status(200).send('EVENT_RECEIVED');
 
   try {
@@ -1360,7 +1372,7 @@ router.post('/meta/webhook', async (req, res) => {
               const lead = await getLeadById(leadgenId);
               if (lead) {
                 await upsertLead({
-                  id: lead.id,
+                  id: lead.id || leadgenId,
                   field_data: lead.field_data,
                   campaign_id: lead.campaign_id,
                   adset_id: lead.adset_id,
@@ -1377,7 +1389,17 @@ router.post('/meta/webhook', async (req, res) => {
   } catch (err) {
     console.error('Error processing leadgen webhook:', err.message);
   }
-});
+};
+
+router.get('/meta/webhook', handleWebhookGet);
+router.get('/api/meta/webhook', handleWebhookGet);
+router.post('/meta/webhook', handleWebhookPost);
+router.post('/api/meta/webhook', handleWebhookPost);
+
+app.get('/meta/webhook', handleWebhookGet);
+app.get('/api/meta/webhook', handleWebhookGet);
+app.post('/meta/webhook', handleWebhookPost);
+app.post('/api/meta/webhook', handleWebhookPost);
 
 // Mount router at both /api and / so all paths match regardless of URL rewriting
 app.use('/api', router);
