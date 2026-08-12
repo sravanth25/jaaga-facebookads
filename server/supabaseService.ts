@@ -3,106 +3,10 @@ import { MetaLead, MetaForm, MetricView } from '../src/types';
 
 let supabaseClient: SupabaseClient | null = null;
 
-// In-memory fallback database when Supabase credentials are not yet set
-const sampleInitialForms: MetaForm[] = [
-  { id: 'form_801', name: 'Q3 Real Estate VIP Callback Form', page_id: 'page_1001' },
-  { id: 'form_802', name: 'Luxury Villa Virtual Brochure Form', page_id: 'page_1001' },
-  { id: 'form_803', name: 'Commercial Property Investment Form', page_id: 'page_1001' },
-];
-
-const sampleInitialLeads: MetaLead[] = [
-  {
-    id: 'lead_9001',
-    full_name: 'Rahul Sharma',
-    phone: '+91 98765 43210',
-    email: 'rahul.sharma@example.com',
-    campaign_id: 'camp_101',
-    adset_id: 'adset_201',
-    ad_id: 'ad_301',
-    form_id: 'form_801',
-    created_time: new Date(Date.now() - 3600000 * 2).toISOString(),
-    field_data: [
-      { name: 'full_name', values: ['Rahul Sharma'] },
-      { name: 'phone_number', values: ['+91 98765 43210'] },
-      { name: 'email', values: ['rahul.sharma@example.com'] },
-      { name: 'budget_range', values: ['₹1.5 Cr - ₹2.5 Cr'] },
-      { name: 'preferred_location', values: ['Whitefield, Bangalore'] },
-    ],
-  },
-  {
-    id: 'lead_9002',
-    full_name: 'Priya Verma',
-    phone: '+91 98123 45678',
-    email: 'priya.verma@example.com',
-    campaign_id: 'camp_101',
-    adset_id: 'adset_201',
-    ad_id: 'ad_301',
-    form_id: 'form_801',
-    created_time: new Date(Date.now() - 3600000 * 5).toISOString(),
-    field_data: [
-      { name: 'full_name', values: ['Priya Verma'] },
-      { name: 'phone_number', values: ['+91 98123 45678'] },
-      { name: 'email', values: ['priya.verma@example.com'] },
-      { name: 'budget_range', values: ['₹2.5 Cr+'] },
-      { name: 'preferred_location', values: ['Indiranagar, Bangalore'] },
-    ],
-  },
-  {
-    id: 'lead_9003',
-    full_name: 'Amit Patel',
-    phone: '+91 99887 76655',
-    email: 'amit.patel@example.com',
-    campaign_id: 'camp_102',
-    adset_id: 'adset_202',
-    ad_id: 'ad_302',
-    form_id: 'form_802',
-    created_time: new Date(Date.now() - 3600000 * 12).toISOString(),
-    field_data: [
-      { name: 'full_name', values: ['Amit Patel'] },
-      { name: 'phone_number', values: ['+91 99887 76655'] },
-      { name: 'email', values: ['amit.patel@example.com'] },
-      { name: 'villa_type', values: ['4 BHK Duplex Villa'] },
-    ],
-  },
-  {
-    id: 'lead_9004',
-    full_name: 'Sneha Kulkarni',
-    phone: '+91 97654 32109',
-    email: 'sneha.k@example.com',
-    campaign_id: 'camp_102',
-    adset_id: 'adset_202',
-    ad_id: 'ad_302',
-    form_id: 'form_802',
-    created_time: new Date(Date.now() - 3600000 * 24).toISOString(),
-    field_data: [
-      { name: 'full_name', values: ['Sneha Kulkarni'] },
-      { name: 'phone_number', values: ['+91 97654 32109'] },
-      { name: 'email', values: ['sneha.k@example.com'] },
-      { name: 'possession_timeline', values: ['Immediate / Ready to Move'] },
-    ],
-  },
-  {
-    id: 'lead_9005',
-    full_name: 'Vikram Singh',
-    phone: '+91 98989 12345',
-    email: 'vikram.singh@example.com',
-    campaign_id: 'camp_104',
-    adset_id: 'adset_201',
-    ad_id: 'ad_301',
-    form_id: 'form_803',
-    created_time: new Date(Date.now() - 3600000 * 36).toISOString(),
-    field_data: [
-      { name: 'full_name', values: ['Vikram Singh'] },
-      { name: 'phone_number', values: ['+91 98989 12345'] },
-      { name: 'email', values: ['vikram.singh@example.com'] },
-      { name: 'space_required', values: ['5,000 - 10,000 sq ft Office'] },
-    ],
-  },
-];
-
+// In-memory store when Supabase credentials are not set
 const inMemoryStore = {
-  leads: new Map<string, MetaLead>(sampleInitialLeads.map(l => [l.id, l])),
-  forms: new Map<string, MetaForm>(sampleInitialForms.map(f => [f.id, f])),
+  leads: new Map<string, MetaLead>(),
+  forms: new Map<string, MetaForm>(),
   views: new Map<string, MetricView>(),
 };
 

@@ -21,13 +21,8 @@ import {
   saveMetricView,
   hasSupabaseConfig,
 } from './supabaseService';
-import {
-  generateSampleOverview,
-  generateSampleCampaigns,
-  generateSampleBreakdown,
-} from './sampleDataService';
 import { getDatePresetBounds } from '../src/lib/formatters';
-import { METRIC_CATALOG, DEFAULT_OVERVIEW_METRICS, DEFAULT_CAMPAIGN_METRICS } from '../src/lib/metrics';
+import { METRIC_CATALOG, DEFAULT_OVERVIEW_METRICS } from '../src/lib/metrics';
 
 export const apiRouter = Router();
 
@@ -47,49 +42,65 @@ apiRouter.get('/overview', async (req: Request, res: Response) => {
   const metricsParam = req.query.metrics as string;
   const requestedMetrics = metricsParam ? metricsParam.split(',').filter(Boolean) : DEFAULT_OVERVIEW_METRICS;
 
-  const { hasToken } = getMetaConfig();
+  const defaultKpis = requestedMetrics.map((key) => {
+    const def = METRIC_CATALOG.find((m) => m.key === key);
+    return {
+      key,
+      label: def?.label || key,
+      value: 0,
+      format: def?.format || 'number',
+    };
+  });
 
+  const { hasToken } = getMetaConfig();
   if (!hasToken) {
-    const sample = generateSampleOverview(since, until, requestedMetrics, 'Meta API credentials (META_ACCESS_TOKEN and META_AD_ACCOUNT_ID) are missing. Displaying interactive preview data.');
     return res.json({
-      ...sample,
+      kpis: defaultKpis,
+      timeSeries: [],
+      topCampaigns: [],
+      warning: 'META_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables are required.',
       since,
       until,
     });
   }
 
-  let warning: string | undefined = undefined;
-  let accountData: any = {};
-  let timeSeries: any[] = [];
-  let topCampaigns: any[] = [];
-
   try {
-    // 1. Fetch account level insights
+    // 1. Fetch account level insights from Meta Graph API
     const insights = await getInsights({
       level: 'account',
       since,
       until,
     });
-    accountData = insights[0] || {};
+    const accountData = insights[0] || {};
 
     // 2. Fetch daily time series
-    timeSeries = await getTimeSeries({ since, until });
+    let timeSeries: any[] = [];
+    try {
+      timeSeries = await getTimeSeries({ since, until });
+    } catch (e) {
+      // Time series can fail independently if permission is limited
+    }
 
-    // 3. Fetch top campaigns by leads
-    const campaignInsights = await getInsights({
-      level: 'campaign',
-      since,
-      until,
-    });
+    // 3. Fetch campaign insights for top campaigns by leads
+    let campaignInsights: any[] = [];
+    try {
+      campaignInsights = await getInsights({
+        level: 'campaign',
+        since,
+        until,
+      });
+    } catch (e) {
+      // Top campaigns can fail independently
+    }
 
-    topCampaigns = campaignInsights
+    const topCampaigns = campaignInsights
       .map((c: any) => {
         const cSpend = parseFloat(c.spend || '0');
         const cLeads = parseActions(c.actions, 'lead');
         const cCpl = cLeads ? cSpend / cLeads : 0;
         return {
-          id: c.campaign_id,
-          name: c.campaign_name || 'Campaign',
+          id: c.campaign_id, // Real numeric Meta campaign ID (15-17 digits)
+          name: c.campaign_name || `Campaign ${c.campaign_id}`,
           spend: cSpend,
           leads: cLeads,
           cost_per_lead: cCpl,
@@ -97,84 +108,78 @@ apiRouter.get('/overview', async (req: Request, res: Response) => {
       })
       .sort((a: any, b: any) => b.leads - a.leads)
       .slice(0, 5);
+
+    const spend = parseFloat(accountData.spend || '0');
+    const impressions = parseInt(accountData.impressions || '0', 10);
+    const reach = parseInt(accountData.reach || '0', 10);
+    const clicks = parseInt(accountData.clicks || '0', 10);
+    const frequency = parseFloat(accountData.frequency || '0') || (reach ? impressions / reach : 0);
+    const ctr = parseFloat(accountData.ctr || '0') || (impressions ? (clicks / impressions) * 100 : 0);
+    const cpc = parseFloat(accountData.cpc || '0') || (clicks ? spend / clicks : 0);
+    const cpm = parseFloat(accountData.cpm || '0') || (impressions ? (spend / impressions) * 1000 : 0);
+
+    const leads = parseActions(accountData.actions, 'lead');
+    const costPerLead = parseCostPerAction(accountData.cost_per_action_type, 'lead') || (leads ? spend / leads : 0);
+    const conversions = parseActions(accountData.actions, 'conversions');
+    const costPerConversion = parseCostPerAction(accountData.cost_per_action_type, 'conversions') || (conversions ? spend / conversions : 0);
+    const roas = parseRoas(accountData.purchase_roas);
+
+    const linkClicks = parseActions(accountData.actions, 'link_click');
+    const landingPageViews = parseActions(accountData.actions, 'landing_page_view');
+    const postEngagement = parseActions(accountData.actions, 'post_engagement');
+    const videoViews = parseActions(accountData.actions, 'video_view');
+    const thruplays = parseActions(accountData.actions, 'video_thruplay_watched_actions');
+
+    const valueMap: Record<string, number> = {
+      spend,
+      impressions,
+      reach,
+      frequency,
+      clicks,
+      link_clicks: linkClicks,
+      ctr,
+      cpc,
+      cpm,
+      leads,
+      cost_per_lead: costPerLead,
+      results: leads || conversions || clicks,
+      cost_per_result: costPerLead || costPerConversion || cpc,
+      conversions,
+      cost_per_conversion: costPerConversion,
+      roas,
+      landing_page_views: landingPageViews,
+      post_engagement: postEngagement,
+      video_views: videoViews,
+      thruplays,
+    };
+
+    const kpis = requestedMetrics.map((key) => {
+      const def = METRIC_CATALOG.find((m) => m.key === key);
+      return {
+        key,
+        label: def?.label || key,
+        value: valueMap[key] ?? 0,
+        format: def?.format || 'number',
+      };
+    });
+
+    res.json({
+      kpis,
+      timeSeries,
+      topCampaigns,
+      since,
+      until,
+    });
   } catch (err: any) {
-    warning = err.message;
-  }
-
-  const spend = parseFloat(accountData.spend || '0');
-
-  // If Meta API failed (e.g. Permission Error #200) or returned empty spend, fall back to sample dataset with the warning preserved
-  if (warning || (!spend && timeSeries.length === 0)) {
-    const sample = generateSampleOverview(since, until, requestedMetrics, warning || 'Meta API returned 0 results for the selected period.');
-    return res.json({
-      ...sample,
+    res.json({
+      kpis: defaultKpis,
+      timeSeries: [],
+      topCampaigns: [],
+      warning: err.message || 'Failed to fetch overview metrics from Meta Graph API.',
       since,
       until,
     });
   }
-
-  const impressions = parseInt(accountData.impressions || '0', 10);
-  const reach = parseInt(accountData.reach || '0', 10);
-  const clicks = parseInt(accountData.clicks || '0', 10);
-  const frequency = parseFloat(accountData.frequency || '0') || (reach ? impressions / reach : 0);
-  const ctr = parseFloat(accountData.ctr || '0') || (impressions ? (clicks / impressions) * 100 : 0);
-  const cpc = parseFloat(accountData.cpc || '0') || (clicks ? spend / clicks : 0);
-  const cpm = parseFloat(accountData.cpm || '0') || (impressions ? (spend / impressions) * 1000 : 0);
-
-  const leads = parseActions(accountData.actions, 'lead');
-  const costPerLead = parseCostPerAction(accountData.cost_per_action_type, 'lead') || (leads ? spend / leads : 0);
-  const conversions = parseActions(accountData.actions, 'conversions');
-  const costPerConversion = parseCostPerAction(accountData.cost_per_action_type, 'conversions') || (conversions ? spend / conversions : 0);
-  const roas = parseRoas(accountData.purchase_roas);
-
-  const linkClicks = parseActions(accountData.actions, 'link_click');
-  const landingPageViews = parseActions(accountData.actions, 'landing_page_view');
-  const postEngagement = parseActions(accountData.actions, 'post_engagement');
-  const videoViews = parseActions(accountData.actions, 'video_view');
-  const thruplays = parseActions(accountData.actions, 'video_thruplay_watched_actions');
-
-  const valueMap: Record<string, number> = {
-    spend,
-    impressions,
-    reach,
-    frequency,
-    clicks,
-    link_clicks: linkClicks,
-    ctr,
-    cpc,
-    cpm,
-    leads,
-    cost_per_lead: costPerLead,
-    results: leads || conversions || clicks,
-    cost_per_result: costPerLead || costPerConversion || cpc,
-    conversions,
-    cost_per_conversion: costPerConversion,
-    roas,
-    landing_page_views: landingPageViews,
-    post_engagement: postEngagement,
-    video_views: videoViews,
-    thruplays,
-  };
-
-  const kpis = requestedMetrics.map(key => {
-    const def = METRIC_CATALOG.find(m => m.key === key);
-    const val = valueMap[key] ?? 0;
-    return {
-      key,
-      label: def?.label || key,
-      value: val,
-      format: def?.format || 'number',
-    };
-  });
-
-  res.json({
-    kpis,
-    timeSeries,
-    topCampaigns,
-    warning,
-    since,
-    until,
-  });
 });
 
 // -------------------------------------------------------------
@@ -187,34 +192,103 @@ apiRouter.get('/campaigns', async (req: Request, res: Response) => {
   const { hasToken } = getMetaConfig();
 
   if (!hasToken) {
-    const sampleItems = generateSampleCampaigns(level, parentId);
     return res.json({
       level,
-      items: sampleItems,
-      warning: 'Meta API credentials missing. Displaying interactive preview data.',
+      items: [],
+      warning: 'META_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables are required.',
+      since,
+      until,
     });
   }
 
   try {
-    // 1. Get raw campaign list if level is campaign
-    let campaignsList: any[] = [];
     if (level === 'campaign') {
+      // 1. Get raw campaigns list (name, status, objective, daily_budget, lifetime_budget)
+      let campaignsList: any[] = [];
       try {
         campaignsList = await getCampaigns();
       } catch (e) {
-        // Handled: Fall back to insights metadata
+        // Continue with insights if raw campaign list endpoint is restricted
       }
+
+      const campaignMap = new Map<string, any>();
+      campaignsList.forEach((c: any) => campaignMap.set(c.id, c));
+
+      // 2. Get Insights at campaign level
+      const insights = await getInsights({
+        level: 'campaign',
+        since,
+        until,
+      });
+
+      const insightsMap = new Map<string, any>();
+      insights.forEach((item: any) => {
+        if (item.campaign_id) {
+          insightsMap.set(item.campaign_id, item);
+        }
+      });
+
+      // Combine all unique campaign IDs from campaigns list & insights
+      const allCampaignIds = Array.from(new Set([...campaignMap.keys(), ...insightsMap.keys()]));
+
+      const items = allCampaignIds.map((id) => {
+        const cMeta = campaignMap.get(id);
+        const item = insightsMap.get(id) || {};
+
+        const spend = parseFloat(item.spend || '0');
+        const impressions = parseInt(item.impressions || '0', 10);
+        const reach = parseInt(item.reach || '0', 10);
+        const clicks = parseInt(item.clicks || '0', 10);
+        const frequency = parseFloat(item.frequency || '0');
+        const ctr = parseFloat(item.ctr || '0') || (impressions ? (clicks / impressions) * 100 : 0);
+        const cpc = parseFloat(item.cpc || '0') || (clicks ? spend / clicks : 0);
+        const cpm = parseFloat(item.cpm || '0') || (impressions ? (spend / impressions) * 1000 : 0);
+
+        const leads = parseActions(item.actions, 'lead');
+        const costPerLead = parseCostPerAction(item.cost_per_action_type, 'lead') || (leads ? spend / leads : 0);
+        const conversions = parseActions(item.actions, 'conversions');
+        const costPerConversion = parseCostPerAction(item.cost_per_action_type, 'conversions') || (conversions ? spend / conversions : 0);
+        const roas = parseRoas(item.purchase_roas);
+
+        return {
+          id, // Real numeric Meta campaign ID (15-17 digits)
+          name: cMeta?.name || item.campaign_name || `Campaign ${id}`,
+          level: 'campaign',
+          status: cMeta?.status || 'ACTIVE',
+          objective: cMeta?.objective || 'OUTCOME_LEADS',
+          daily_budget: cMeta?.daily_budget,
+          lifetime_budget: cMeta?.lifetime_budget,
+          campaign_id: id,
+          insights: {
+            spend,
+            impressions,
+            reach,
+            frequency,
+            clicks,
+            ctr,
+            cpc,
+            cpm,
+            leads,
+            cost_per_lead: costPerLead,
+            results: leads || conversions || clicks,
+            cost_per_result: costPerLead || costPerConversion || cpc,
+            conversions,
+            cost_per_conversion: costPerConversion,
+            roas,
+          },
+        };
+      });
+
+      return res.json({
+        level: 'campaign',
+        items,
+        since,
+        until,
+      });
     }
 
-    // 2. Get Insights at requested level
-    const insights = await getInsights({
-      level,
-      since,
-      until,
-    });
-
-    const campaignMap = new Map<string, any>();
-    campaignsList.forEach(c => campaignMap.set(c.id, c));
+    // Handle adset or ad drilldowns
+    const insights = await getInsights({ level, since, until });
 
     let items = insights.map((item: any) => {
       const spend = parseFloat(item.spend || '0');
@@ -232,22 +306,15 @@ apiRouter.get('/campaigns', async (req: Request, res: Response) => {
       const costPerConversion = parseCostPerAction(item.cost_per_action_type, 'conversions') || (conversions ? spend / conversions : 0);
       const roas = parseRoas(item.purchase_roas);
 
-      const linkClicks = parseActions(item.actions, 'link_click');
-      const landingPageViews = parseActions(item.actions, 'landing_page_view');
-      const postEngagement = parseActions(item.actions, 'post_engagement');
-      const videoViews = parseActions(item.actions, 'video_view');
-      const thruplays = parseActions(item.actions, 'video_thruplay_watched_actions');
-
       const id = item[`${level}_id`] || item.campaign_id || 'unknown';
       const name = item[`${level}_name`] || item.campaign_name || 'Unnamed';
-      const metaCampaign = campaignMap.get(id);
 
       return {
         id,
         name,
         level,
-        status: metaCampaign?.status || 'ACTIVE',
-        objective: metaCampaign?.objective || 'OUTCOME_LEADS',
+        status: 'ACTIVE',
+        objective: 'OUTCOME_LEADS',
         campaign_id: item.campaign_id,
         adset_id: item.adset_id,
         ad_id: item.ad_id,
@@ -257,7 +324,6 @@ apiRouter.get('/campaigns', async (req: Request, res: Response) => {
           reach,
           frequency,
           clicks,
-          link_clicks: linkClicks,
           ctr,
           cpc,
           cpm,
@@ -268,24 +334,16 @@ apiRouter.get('/campaigns', async (req: Request, res: Response) => {
           conversions,
           cost_per_conversion: costPerConversion,
           roas,
-          landing_page_views: landingPageViews,
-          post_engagement: postEngagement,
-          video_views: videoViews,
-          thruplays,
         },
       };
     });
 
     if (parentId) {
       if (level === 'adset') {
-        items = items.filter(i => i.campaign_id === parentId);
+        items = items.filter((i: any) => i.campaign_id === parentId);
       } else if (level === 'ad') {
-        items = items.filter(i => i.adset_id === parentId);
+        items = items.filter((i: any) => i.adset_id === parentId);
       }
-    }
-
-    if (items.length === 0) {
-      items = generateSampleCampaigns(level, parentId);
     }
 
     res.json({
@@ -295,11 +353,12 @@ apiRouter.get('/campaigns', async (req: Request, res: Response) => {
       until,
     });
   } catch (err: any) {
-    const sampleItems = generateSampleCampaigns(level, parentId);
     res.json({
       level,
-      items: sampleItems,
-      warning: err.message || 'Error loading campaigns',
+      items: [],
+      warning: err.message || 'Failed to fetch campaign insights from Meta API.',
+      since,
+      until,
     });
   }
 });
@@ -313,8 +372,11 @@ apiRouter.get('/insights', async (req: Request, res: Response) => {
   const { hasToken } = getMetaConfig();
 
   if (!hasToken) {
-    const sample = generateSampleBreakdown(breakdown);
-    return res.json({ breakdown, items: sample });
+    return res.json({
+      breakdown,
+      items: [],
+      warning: 'META_ACCESS_TOKEN and META_AD_ACCOUNT_ID environment variables are required.',
+    });
   }
 
   try {
@@ -325,7 +387,7 @@ apiRouter.get('/insights', async (req: Request, res: Response) => {
       breakdowns: breakdown,
     });
 
-    let items = insights.map((item: any) => {
+    const items = insights.map((item: any) => {
       let name = 'Other';
       if (breakdown === 'publisher_platform') name = item.publisher_platform || 'unknown';
       else if (breakdown === 'age') name = item.age || 'unknown';
@@ -348,14 +410,13 @@ apiRouter.get('/insights', async (req: Request, res: Response) => {
       };
     });
 
-    if (items.length === 0) {
-      items = generateSampleBreakdown(breakdown);
-    }
-
     res.json({ breakdown, items });
   } catch (err: any) {
-    const sample = generateSampleBreakdown(breakdown);
-    res.json({ breakdown, items: sample, warning: err.message });
+    res.json({
+      breakdown,
+      items: [],
+      warning: err.message || 'Failed to fetch breakdown insights from Meta API.',
+    });
   }
 });
 
@@ -366,7 +427,7 @@ apiRouter.get('/views', async (req: Request, res: Response) => {
   try {
     const scope = (req.query.scope as 'overview' | 'campaigns') || 'overview';
     const view = await getMetricView(scope);
-    const defaultMetrics = scope === 'overview' ? DEFAULT_OVERVIEW_METRICS : DEFAULT_CAMPAIGN_METRICS;
+    const defaultMetrics = scope === 'overview' ? DEFAULT_OVERVIEW_METRICS : [];
 
     res.json({
       scope,
@@ -435,7 +496,7 @@ apiRouter.get('/leads/export', async (req: Request, res: Response) => {
     });
 
     const headers = ['Lead ID', 'Full Name', 'Phone', 'Email', 'Campaign ID', 'Form ID', 'Created Time'];
-    const rows = leads.map(l => [
+    const rows = leads.map((l) => [
       `"${l.id}"`,
       `"${(l.full_name || '').replace(/"/g, '""')}"`,
       `"${(l.phone || '').replace(/"/g, '""')}"`,
@@ -445,7 +506,7 @@ apiRouter.get('/leads/export', async (req: Request, res: Response) => {
       `"${l.created_time || ''}"`,
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
 
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', `attachment; filename=meta-leads-${new Date().toISOString().split('T')[0]}.csv`);
@@ -462,32 +523,11 @@ const handleLeadSync = async (req: Request, res: Response) => {
   try {
     const { pageId } = getMetaConfig();
     if (!pageId) {
-      // Backfill initial sample forms & leads
-      const sampleForms = await queryForms();
-      const sampleLeads = await queryLeads({});
-      return res.json({
-        success: true,
-        formsSynced: sampleForms.length,
-        leadsSynced: sampleLeads.length,
-        message: `Synced ${sampleForms.length} sample forms and ${sampleLeads.length} leads for preview mode. Configure META_PAGE_ID to sync live Page forms.`,
-      });
+      return res.status(400).json({ error: 'META_PAGE_ID environment variable is required to sync leadgen forms and leads.' });
     }
 
-    // 1. Fetch lead forms
-    let forms: any[] = [];
-    try {
-      forms = await getLeadgenForms();
-    } catch (e: any) {
-      const sampleForms = await queryForms();
-      const sampleLeads = await queryLeads({});
-      return res.json({
-        success: true,
-        formsSynced: sampleForms.length,
-        leadsSynced: sampleLeads.length,
-        message: `Meta Page Notice: ${e.message}. Active sample leads remain available.`,
-      });
-    }
-
+    // 1. Fetch lead forms via GET /{META_PAGE_ID}/leadgen_forms
+    const forms = await getLeadgenForms();
     let totalLeadsSynced = 0;
 
     for (const form of forms) {
@@ -497,7 +537,7 @@ const handleLeadSync = async (req: Request, res: Response) => {
         page_id: pageId,
       });
 
-      // 2. Fetch leads for each form
+      // 2. Fetch leads for each form via GET /{form_id}/leads
       try {
         const formLeads = await getFormLeads(form.id);
         for (const lead of formLeads) {
@@ -514,7 +554,7 @@ const handleLeadSync = async (req: Request, res: Response) => {
           totalLeadsSynced++;
         }
       } catch (err: any) {
-        // Handled: Individual form fetch failure
+        console.error(`Error syncing leads for form ${form.id}:`, err.message);
       }
     }
 
@@ -522,10 +562,10 @@ const handleLeadSync = async (req: Request, res: Response) => {
       success: true,
       formsSynced: forms.length,
       leadsSynced: totalLeadsSynced,
-      message: `Successfully synced ${forms.length} forms and ${totalLeadsSynced} leads.`,
+      message: `Successfully synced ${forms.length} forms and ${totalLeadsSynced} leads from Meta Page.`,
     });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Failed to sync leads from Meta.' });
+    res.status(500).json({ error: err.message || 'Failed to sync leads from Meta API.' });
   }
 };
 
@@ -537,11 +577,25 @@ apiRouter.get('/leads/sync-cron', handleLeadSync);
 // GET /api/forms
 // -------------------------------------------------------------
 apiRouter.get('/forms', async (req: Request, res: Response) => {
+  const { pageId } = getMetaConfig();
+  if (!pageId) {
+    return res.json({ items: [], warning: 'META_PAGE_ID environment variable is not configured.' });
+  }
+
   try {
-    const forms = await queryForms();
+    // Fetch lead forms directly via GET /{META_PAGE_ID}/leadgen_forms
+    const forms = await getLeadgenForms();
+    for (const form of forms) {
+      await upsertForm({
+        id: form.id,
+        name: form.name,
+        page_id: pageId,
+      });
+    }
+
     res.json({ items: forms });
   } catch (err: any) {
-    res.status(500).json({ error: err.message || 'Error fetching forms' });
+    res.json({ items: [], warning: err.message || 'Failed to fetch leadgen forms from Meta Page.' });
   }
 });
 
@@ -622,7 +676,7 @@ apiRouter.post('/meta/webhook', async (req: Request, res: Response) => {
             if (change.field === 'leadgen' && change.value?.leadgen_id) {
               const leadgenId = change.value.leadgen_id;
               console.log(`Received leadgen webhook event for lead ID: ${leadgenId}`);
-              
+
               const lead = await getLeadById(leadgenId);
               if (lead) {
                 await upsertLead({

@@ -72,17 +72,27 @@ export function parseActions(actions: Array<{ action_type: string; value: string
   if (!actions || !Array.isArray(actions)) return 0;
   
   if (typeKey === 'lead') {
-    const leadAction = actions.find(a => a.action_type === 'lead' || a.action_type === 'onsite_conversion.lead_grouped');
-    return leadAction ? parseFloat(String(leadAction.value)) : 0;
+    let total = 0;
+    for (const a of actions) {
+      if (a.action_type === 'lead' || a.action_type === 'onsite_conversion.lead_grouped') {
+        total += parseFloat(String(a.value || '0'));
+      }
+    }
+    return total;
   }
 
   if (typeKey === 'conversions' || typeKey === 'purchase') {
-    const purchaseAction = actions.find(a => a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase');
-    return purchaseAction ? parseFloat(String(purchaseAction.value)) : 0;
+    let total = 0;
+    for (const a of actions) {
+      if (a.action_type === 'purchase' || a.action_type === 'offsite_conversion.fb_pixel_purchase') {
+        total += parseFloat(String(a.value || '0'));
+      }
+    }
+    return total;
   }
 
   const found = actions.find(a => a.action_type === typeKey);
-  return found ? parseFloat(String(found.value)) : 0;
+  return found ? parseFloat(String(found.value || '0')) : 0;
 }
 
 export function parseCostPerAction(costs: Array<{ action_type: string; value: string | number }> | undefined, typeKey: string): number {

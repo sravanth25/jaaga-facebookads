@@ -113,20 +113,20 @@ export default function App() {
   // Load Overview
   const fetchOverview = useCallback(async () => {
     setIsLoadingOverview(true);
+    setOverviewWarning(undefined);
     try {
       const dateQ = buildDateQuery();
       const metricsQ = overviewMetrics.join(',');
       const res = await fetch(`/api/overview?${dateQ}&metrics=${metricsQ}`);
       const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error || 'Failed to load overview data');
-
       setKpis(data.kpis || []);
       setTimeSeries(data.timeSeries || []);
       setTopCampaigns(data.topCampaigns || []);
-      setOverviewWarning(data.warning);
+      if (data.warning) setOverviewWarning(data.warning);
+      if (!res.ok && !data.warning) setOverviewWarning(data.error || 'Failed to load overview data');
     } catch (err: any) {
-      console.error('Overview error:', err);
+      console.warn('Overview notice:', err);
       setOverviewWarning(err.message);
     } finally {
       setIsLoadingOverview(false);
