@@ -1,0 +1,6 @@
+{
+  "name": "Meta Ads Results & Leads Dashboard",
+  "description": "Standalone read-only dashboard for Meta Ads results and Lead Ads with custom metrics, campaign drilldowns, analytics, and Supabase integration.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
