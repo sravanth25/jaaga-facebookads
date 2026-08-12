@@ -52,6 +52,54 @@ export function parseFieldData(fieldData: Array<{ name: string; values: string[]
 }
 
 /**
+ * Batch upsert leads into Supabase or fallback store in chunks of 500
+ */
+export async function batchUpsertLeads(leads: MetaLead[]): Promise<{ imported: number }> {
+  if (leads.length === 0) return { imported: 0 };
+  const db = getSupabase();
+  let imported = 0;
+
+  if (db) {
+    const BATCH_SIZE = 500;
+    for (let i = 0; i < leads.length; i += BATCH_SIZE) {
+      const batch = leads.slice(i, i + BATCH_SIZE);
+      const payload = batch.map((l) => ({
+        id: l.id,
+        full_name: l.full_name || 'Anonymous',
+        phone: l.phone || '—',
+        email: l.email || '—',
+        field_data: l.field_data || [],
+        campaign_id: l.campaign_id || null,
+        adset_id: l.adset_id || null,
+        ad_id: l.ad_id || null,
+        form_id: l.form_id || null,
+        created_time: l.created_time || new Date().toISOString(),
+        synced_at: l.synced_at || new Date().toISOString(),
+      }));
+
+      const { data, error } = await db
+        .from('meta_leads')
+        .upsert(payload, { onConflict: 'id' })
+        .select('id');
+
+      if (error) {
+        console.error('Supabase batch upsert error:', error);
+        throw new Error(`Supabase Upsert Error: ${error.message} (${error.code || ''}) ${error.details || ''}`);
+      } else {
+        imported += data ? data.length : batch.length;
+      }
+    }
+  } else {
+    for (const l of leads) {
+      inMemoryStore.leads.set(l.id, l);
+      imported++;
+    }
+  }
+
+  return { imported };
+}
+
+/**
  * Upsert lead into Supabase or fallback store
  */
 export async function upsertLead(lead: MetaLead): Promise<{ status: 'imported' | 'updated' }> {

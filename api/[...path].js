@@ -1061,9 +1061,7 @@ const handleSheetSync = async (req, res) => {
             i++;
           }
           currentRow.push(currentCell.trim());
-          if (currentRow.some((cell) => cell.length > 0)) {
-            lines.push(currentRow);
-          }
+          lines.push(currentRow);
           currentRow = [];
           currentCell = '';
         } else {
@@ -1073,31 +1071,39 @@ const handleSheetSync = async (req, res) => {
 
       if (currentCell || currentRow.length > 0) {
         currentRow.push(currentCell.trim());
-        if (currentRow.some((cell) => cell.length > 0)) {
-          lines.push(currentRow);
-        }
+        lines.push(currentRow);
       }
 
       if (lines.length === 0) return { headers: [], rows: [] };
-      return { headers: lines[0].map((h) => h.trim()), rows: lines.slice(1) };
+
+      // Filter out trailing empty headers
+      const headers = lines[0].map((h) => h.trim());
+      while (headers.length > 0 && headers[headers.length - 1] === '') {
+        headers.pop();
+      }
+
+      const rows = lines.slice(1).filter((r) => r.some((c) => c && c.trim() !== ''));
+      return { headers, rows };
     };
 
     const { headers, rows } = parseCsvText(csvText);
     if (headers.length === 0 || rows.length === 0) {
-      return res.json({ imported: 0, updated: 0, skipped: 0, total: 0, message: 'CSV is empty.' });
+      return res.json({ total: 0, imported: 0, skipped: 0, errors: 0, message: 'CSV is empty.' });
     }
 
     const colIndexMap = {};
     headers.forEach((h, idx) => {
-      const key = h.trim().toLowerCase().replace(/[\s_]+/g, '');
-      colIndexMap[key] = idx;
+      if (h) {
+        const key = h.trim().toLowerCase().replace(/[\s_]+/g, '');
+        colIndexMap[key] = idx;
+      }
     });
 
     const getCol = (row, ...keys) => {
       for (const k of keys) {
         const normK = k.trim().toLowerCase().replace(/[\s_]+/g, '');
         const idx = colIndexMap[normK];
-        if (idx !== undefined && row[idx] !== undefined && row[idx] !== null) {
+        if (idx !== undefined && idx < row.length && row[idx] !== undefined && row[idx] !== null) {
           return row[idx].trim();
         }
       }
@@ -1132,9 +1138,9 @@ const handleSheetSync = async (req, res) => {
       return `sheet_${hash}`;
     };
 
-    let imported = 0;
-    let updated = 0;
+    const total = rows.length;
     let skipped = 0;
+    const leadsToUpsert = [];
 
     for (const row of rows) {
       if (!row || row.length === 0 || row.every((c) => !c || c.trim() === '')) {
@@ -1162,7 +1168,7 @@ const handleSheetSync = async (req, res) => {
       const leadStatus = getCol(row, 'lead_status', 'leadstatus', 'status');
       const remarks = getCol(row, 'remarks');
 
-      const leadIdFromCol = stripPrefix(rawId, 'l:');
+      const cleanId = stripPrefix(rawId, 'l:');
       const phone = normalizePhone(rawPhone);
       const campaignId = stripPrefix(rawCampaignId, 'c:');
       const adId = stripPrefix(rawAdId, 'ag:');
@@ -1170,9 +1176,9 @@ const handleSheetSync = async (req, res) => {
       const formId = stripPrefix(rawFormId, 'f:');
       const email = rawEmail ? rawEmail.trim() : '';
 
-      const finalLeadId = leadIdFromCol || generateId(phone, email, rawCreatedTime);
+      const finalLeadId = cleanId || generateId(phone, email, rawCreatedTime);
 
-      if (!fullName && !phone && !email && !leadIdFromCol) {
+      if (!fullName && !phone && !email && !cleanId) {
         skipped++;
         continue;
       }
@@ -1181,88 +1187,99 @@ const handleSheetSync = async (req, res) => {
       if (rawCreatedTime) {
         const parsed = new Date(rawCreatedTime);
         if (!isNaN(parsed.getTime())) createdTime = parsed.toISOString();
-        else createdTime = rawCreatedTime;
       }
 
       const fieldData = [];
       if (fullName) fieldData.push({ name: 'full_name', values: [fullName] });
       if (phone) fieldData.push({ name: 'phone', values: [phone] });
       if (email) fieldData.push({ name: 'email', values: [email] });
+      if (campaignName) fieldData.push({ name: 'campaign_name', values: [campaignName] });
+      if (adsetName) fieldData.push({ name: 'adset_name', values: [adsetName] });
+      if (adName) fieldData.push({ name: 'ad_name', values: [adName] });
+      if (formName) fieldData.push({ name: 'form_name', values: [formName] });
       if (state) fieldData.push({ name: 'state', values: [state] });
       if (city) fieldData.push({ name: 'city', values: [city] });
       if (leadStatus) fieldData.push({ name: 'lead_status', values: [leadStatus] });
       if (remarks) fieldData.push({ name: 'Remarks', values: [remarks] });
       if (platform) fieldData.push({ name: 'platform', values: [platform] });
       if (isOrganic) fieldData.push({ name: 'is_organic', values: [isOrganic] });
+      fieldData.push({ name: 'source', values: ['sheet'] });
 
-      try {
-        const db = getSupabase();
-        let status = 'imported';
-        const leadObj = {
-          id: finalLeadId,
-          full_name: fullName || 'Anonymous',
-          phone: phone || '—',
-          email: email || '—',
-          campaign_id: campaignId,
-          campaign_name: campaignName,
-          adset_id: adsetId,
-          adset_name: adsetName,
-          ad_id: adId,
-          ad_name: adName,
-          form_id: formId,
-          form_name: formName,
-          field_data: fieldData,
-          created_time: createdTime,
-          source: 'sheet',
-          synced_at: new Date().toISOString(),
-        };
+      leadsToUpsert.push({
+        id: finalLeadId,
+        full_name: fullName || 'Anonymous',
+        phone: phone || '—',
+        email: email || '—',
+        campaign_id: campaignId || null,
+        campaign_name: campaignName || null,
+        adset_id: adsetId || null,
+        adset_name: adsetName || null,
+        ad_id: adId || null,
+        ad_name: adName || null,
+        form_id: formId || null,
+        form_name: formName || null,
+        field_data: fieldData,
+        created_time: createdTime,
+        source: 'sheet',
+        synced_at: new Date().toISOString(),
+      });
+    }
 
-        if (db) {
-          const { data: existing } = await db.from('meta_leads').select('id').eq('id', finalLeadId).single();
-          if (existing) status = 'updated';
+    const db = getSupabase();
+    let imported = 0;
 
-          const { error } = await db.from('meta_leads').upsert({
-            id: leadObj.id,
-            full_name: leadObj.full_name,
-            phone: leadObj.phone,
-            email: leadObj.email,
-            field_data: leadObj.field_data,
-            campaign_id: leadObj.campaign_id,
-            campaign_name: leadObj.campaign_name,
-            adset_id: leadObj.adset_id,
-            adset_name: leadObj.adset_name,
-            ad_id: leadObj.ad_id,
-            ad_name: leadObj.ad_name,
-            form_id: leadObj.form_id,
-            form_name: leadObj.form_name,
-            created_time: leadObj.created_time,
-            source: leadObj.source,
-            synced_at: leadObj.synced_at,
-          }, { onConflict: 'id' });
+    if (db && leadsToUpsert.length > 0) {
+      const BATCH_SIZE = 500;
+      for (let i = 0; i < leadsToUpsert.length; i += BATCH_SIZE) {
+        const batch = leadsToUpsert.slice(i, i + BATCH_SIZE);
+        const payload = batch.map((l) => ({
+          id: l.id,
+          full_name: l.full_name || 'Anonymous',
+          phone: l.phone || '—',
+          email: l.email || '—',
+          field_data: l.field_data || [],
+          campaign_id: l.campaign_id || null,
+          adset_id: l.adset_id || null,
+          ad_id: l.ad_id || null,
+          form_id: l.form_id || null,
+          created_time: l.created_time || new Date().toISOString(),
+          synced_at: l.synced_at || new Date().toISOString(),
+        }));
 
-          if (error) inMemoryStore.leads.set(finalLeadId, leadObj);
+        const { data, error } = await db
+          .from('meta_leads')
+          .upsert(payload, { onConflict: 'id' })
+          .select('id');
+
+        if (error) {
+          console.error('Supabase batch upsert error:', error);
+          throw new Error(`Supabase Upsert Error: ${error.message} (${error.code || ''}) ${error.details || ''}`);
         } else {
-          if (inMemoryStore.leads.has(finalLeadId)) status = 'updated';
-          inMemoryStore.leads.set(finalLeadId, leadObj);
+          imported += data ? data.length : batch.length;
         }
-
-        if (status === 'imported') imported++;
-        else updated++;
-      } catch (e) {
-        skipped++;
+      }
+    } else if (!db) {
+      for (const l of leadsToUpsert) {
+        inMemoryStore.leads.set(l.id, l);
+        imported++;
       }
     }
 
-    const total = imported + updated + skipped;
     return res.json({
-      imported,
-      updated,
-      skipped,
       total,
-      message: `Successfully processed ${rows.length} rows: ${imported} imported, ${updated} updated, ${skipped} skipped.`,
+      imported,
+      skipped,
+      errors: 0,
     });
   } catch (err) {
-    res.status(500).json({ error: err.message || 'Failed to sync leads from Google Sheet.' });
+    console.error('Sheet Sync Error:', err);
+    res.status(500).json({
+      error: err.message || 'Failed to sync leads from Google Sheet.',
+      total: 0,
+      imported: 0,
+      skipped: 0,
+      errors: 1,
+    });
   }
 };
 

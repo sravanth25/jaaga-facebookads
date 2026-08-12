@@ -1,7 +1,8 @@
 import crypto from 'crypto';
-import { upsertLead } from './supabaseService';
+import { batchUpsertLeads } from './supabaseService';
+import { MetaLead } from '../src/types';
 
-function parseCsvText(csvText: string): { headers: string[]; rows: string[][] } {
+export function parseCsvText(csvText: string): { headers: string[]; rows: string[][] } {
   const lines: string[][] = [];
   let currentRow: string[] = [];
   let currentCell = '';
@@ -14,7 +15,7 @@ function parseCsvText(csvText: string): { headers: string[]; rows: string[][] } 
     if (char === '"') {
       if (inQuotes && nextChar === '"') {
         currentCell += '"';
-        i++; // skip escaped quote
+        i++; // skip escaped double quote
       } else {
         inQuotes = !inQuotes;
       }
@@ -26,9 +27,7 @@ function parseCsvText(csvText: string): { headers: string[]; rows: string[][] } 
         i++; // skip \n
       }
       currentRow.push(currentCell.trim());
-      if (currentRow.some((cell) => cell.length > 0)) {
-        lines.push(currentRow);
-      }
+      lines.push(currentRow);
       currentRow = [];
       currentCell = '';
     } else {
@@ -38,14 +37,20 @@ function parseCsvText(csvText: string): { headers: string[]; rows: string[][] } 
 
   if (currentCell || currentRow.length > 0) {
     currentRow.push(currentCell.trim());
-    if (currentRow.some((cell) => cell.length > 0)) {
-      lines.push(currentRow);
-    }
+    lines.push(currentRow);
   }
 
   if (lines.length === 0) return { headers: [], rows: [] };
+
+  // Filter out trailing empty headers
   const headers = lines[0].map((h) => h.trim());
-  return { headers, rows: lines.slice(1) };
+  while (headers.length > 0 && headers[headers.length - 1] === '') {
+    headers.pop();
+  }
+
+  // Filter out empty rows
+  const rows = lines.slice(1).filter((r) => r.some((c) => c && c.trim() !== ''));
+  return { headers, rows };
 }
 
 function stripPrefix(val: string | undefined | null, prefix: string): string {
@@ -83,11 +88,12 @@ export function generateStableLeadId(phone: string, email: string, dateStr: stri
 }
 
 export async function syncSheetLeads(): Promise<{
-  imported: number;
-  updated: number;
-  skipped: number;
   total: number;
+  imported: number;
+  skipped: number;
+  errors: number;
   message?: string;
+  error?: string;
 }> {
   const csvUrl = process.env.LEADS_SHEET_CSV_URL;
   if (!csvUrl) {
@@ -104,35 +110,37 @@ export async function syncSheetLeads(): Promise<{
 
   if (headers.length === 0 || rows.length === 0) {
     return {
-      imported: 0,
-      updated: 0,
-      skipped: 0,
       total: 0,
+      imported: 0,
+      skipped: 0,
+      errors: 0,
       message: 'Google Sheet CSV is empty or has no data rows.',
     };
   }
 
-  // Create column index mapping (case & character insensitive)
+  // Create column index mapping (case & space/underscore insensitive)
   const colIndexMap: Record<string, number> = {};
   headers.forEach((h, idx) => {
-    const key = h.trim().toLowerCase().replace(/[\s_]+/g, '');
-    colIndexMap[key] = idx;
+    if (h) {
+      const key = h.toLowerCase().replace(/[\s_]+/g, '');
+      colIndexMap[key] = idx;
+    }
   });
 
   const getCol = (row: string[], ...keys: string[]): string => {
     for (const k of keys) {
-      const normK = k.trim().toLowerCase().replace(/[\s_]+/g, '');
+      const normK = k.toLowerCase().replace(/[\s_]+/g, '');
       const idx = colIndexMap[normK];
-      if (idx !== undefined && row[idx] !== undefined && row[idx] !== null) {
+      if (idx !== undefined && idx < row.length && row[idx] !== undefined && row[idx] !== null) {
         return row[idx].trim();
       }
     }
     return '';
   };
 
-  let imported = 0;
-  let updated = 0;
+  const total = rows.length;
   let skipped = 0;
+  const leadsToUpsert: MetaLead[] = [];
 
   for (const row of rows) {
     if (!row || row.length === 0 || row.every((c) => !c || c.trim() === '')) {
@@ -140,7 +148,7 @@ export async function syncSheetLeads(): Promise<{
       continue;
     }
 
-    // Extract columns according to specification
+    // Extract raw values
     const rawId = getCol(row, 'id');
     const rawCreatedTime = getCol(row, 'created_time', 'createdtime', 'date', 'timestamp');
     const rawAdId = getCol(row, 'ad_id', 'adid');
@@ -163,8 +171,8 @@ export async function syncSheetLeads(): Promise<{
 
     // Strip prefix rules:
     // id: remove leading "l:"
-    const leadIdFromCol = stripPrefix(rawId, 'l:');
-    // phone: remove leading "p:" then normalize
+    const cleanId = stripPrefix(rawId, 'l:');
+    // phone: remove leading "p:" then keep digits only
     const phone = normalizePhone(rawPhone);
     // campaign_id: remove leading "c:"
     const campaignId = stripPrefix(rawCampaignId, 'c:');
@@ -177,11 +185,10 @@ export async function syncSheetLeads(): Promise<{
 
     const email = rawEmail ? rawEmail.trim() : '';
 
-    // Final dedupe key
-    const finalLeadId = leadIdFromCol || generateStableLeadId(phone, email, rawCreatedTime);
+    const finalLeadId = cleanId || generateStableLeadId(phone, email, rawCreatedTime);
 
     // Skip row if no identifier exists at all
-    if (!fullName && !phone && !email && !leadIdFromCol) {
+    if (!fullName && !phone && !email && !cleanId) {
       skipped++;
       continue;
     }
@@ -192,59 +199,53 @@ export async function syncSheetLeads(): Promise<{
       const parsed = new Date(rawCreatedTime);
       if (!isNaN(parsed.getTime())) {
         createdTime = parsed.toISOString();
-      } else {
-        createdTime = rawCreatedTime;
       }
     }
 
-    // field_data jsonb containing state, city, lead_status, Remarks, platform, is_organic
+    // JSONB field_data
     const fieldData: Array<{ name: string; values: string[] }> = [];
     if (fullName) fieldData.push({ name: 'full_name', values: [fullName] });
     if (phone) fieldData.push({ name: 'phone', values: [phone] });
     if (email) fieldData.push({ name: 'email', values: [email] });
+    if (campaignName) fieldData.push({ name: 'campaign_name', values: [campaignName] });
+    if (adsetName) fieldData.push({ name: 'adset_name', values: [adsetName] });
+    if (adName) fieldData.push({ name: 'ad_name', values: [adName] });
+    if (formName) fieldData.push({ name: 'form_name', values: [formName] });
     if (state) fieldData.push({ name: 'state', values: [state] });
     if (city) fieldData.push({ name: 'city', values: [city] });
     if (leadStatus) fieldData.push({ name: 'lead_status', values: [leadStatus] });
     if (remarks) fieldData.push({ name: 'Remarks', values: [remarks] });
     if (platform) fieldData.push({ name: 'platform', values: [platform] });
     if (isOrganic) fieldData.push({ name: 'is_organic', values: [isOrganic] });
+    fieldData.push({ name: 'source', values: ['sheet'] });
 
-    try {
-      const res = await upsertLead({
-        id: finalLeadId,
-        full_name: fullName || 'Anonymous',
-        phone: phone || '—',
-        email: email || '—',
-        campaign_id: campaignId,
-        campaign_name: campaignName,
-        adset_id: adsetId,
-        adset_name: adsetName,
-        ad_id: adId,
-        ad_name: adName,
-        form_id: formId,
-        form_name: formName,
-        field_data: fieldData,
-        created_time: createdTime,
-        source: 'sheet',
-      });
-
-      if (res.status === 'imported') {
-        imported++;
-      } else {
-        updated++;
-      }
-    } catch (err) {
-      console.error(`Error upserting sheet lead ${finalLeadId}:`, err);
-      skipped++;
-    }
+    leadsToUpsert.push({
+      id: finalLeadId,
+      full_name: fullName || 'Anonymous',
+      phone: phone || '—',
+      email: email || '—',
+      campaign_id: campaignId || undefined,
+      campaign_name: campaignName || undefined,
+      adset_id: adsetId || undefined,
+      adset_name: adsetName || undefined,
+      ad_id: adId || undefined,
+      ad_name: adName || undefined,
+      form_id: formId || undefined,
+      form_name: formName || undefined,
+      field_data: fieldData,
+      created_time: createdTime,
+      source: 'sheet',
+      synced_at: new Date().toISOString(),
+    });
   }
 
-  const total = imported + updated + skipped;
+  // Batched Supabase upsert
+  const { imported } = await batchUpsertLeads(leadsToUpsert);
+
   return {
-    imported,
-    updated,
-    skipped,
     total,
-    message: `Sheet Sync Complete: ${imported} imported, ${updated} updated, ${skipped} skipped (Total: ${total}).`,
+    imported,
+    skipped,
+    errors: 0,
   };
 }
