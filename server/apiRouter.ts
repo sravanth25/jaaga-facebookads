@@ -604,14 +604,16 @@ apiRouter.get('/forms', async (req: Request, res: Response) => {
 // -------------------------------------------------------------
 apiRouter.get('/settings', (req: Request, res: Response) => {
   const config = getMetaConfig();
-  const host = req.get('host') || 'localhost:3000';
-  let protocol = req.protocol || 'http';
-  if (req.get('x-forwarded-proto')) {
-    protocol = req.get('x-forwarded-proto')!.split(',')[0].trim();
-  }
-  let appUrl = process.env.APP_URL;
-  if (!appUrl) {
-    appUrl = `${protocol}://${host}`;
+  const rawHost = req.headers?.host || process.env.VERCEL_URL || 'localhost:3000';
+  const cleanHost = rawHost.replace(/^https?:\/\//, '');
+
+  let appUrl = `https://${cleanHost}`;
+  if (process.env.APP_URL) {
+    let customUrl = process.env.APP_URL.trim().replace(/\/$/, '');
+    if (!customUrl.startsWith('http://') && !customUrl.startsWith('https://')) {
+      customUrl = `https://${customUrl}`;
+    }
+    appUrl = customUrl;
   }
 
   let webhookUrl = `${appUrl}/api/meta/webhook`;
@@ -624,8 +626,8 @@ apiRouter.get('/settings', (req: Request, res: Response) => {
     pageId: config.pageId || 'Not set',
     webhookUrl,
     verifyToken: config.verifyToken || 'Not set',
-    hasToken: config.hasToken,
-    hasSupabase: hasSupabaseConfig(),
+    hasToken: !!process.env.META_ACCESS_TOKEN,
+    hasSupabase: !!process.env.SUPABASE_URL,
     appUrl,
   });
 });
