@@ -898,6 +898,28 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Path Normalization Middleware for Vercel Catch-All Routing
+app.use((req, res, next) => {
+  if (req.query && req.query.path) {
+    const rawPath = Array.isArray(req.query.path)
+      ? req.query.path.join('/')
+      : String(req.query.path);
+
+    const qIdx = req.url.indexOf('?');
+    const queryString = qIdx !== -1 ? req.url.slice(qIdx) : '';
+
+    let cleanPath = rawPath;
+    if (!cleanPath.startsWith('/')) {
+      cleanPath = '/' + cleanPath;
+    }
+    if (!cleanPath.startsWith('/api/')) {
+      cleanPath = '/api' + cleanPath;
+    }
+    req.url = cleanPath + queryString;
+  }
+  next();
+});
+
 const router = express.Router();
 
 // GET /overview
@@ -1219,8 +1241,8 @@ router.get('/leads/export', async (req, res) => {
   }
 });
 
-// POST /leads/sync
-router.post('/leads/sync', async (req, res) => {
+// POST & GET /leads/sync and /leads/sync-cron
+const handleSyncLeads = async (req, res) => {
   try {
     const { pageId } = getMetaConfig();
     if (!pageId) {
@@ -1282,7 +1304,14 @@ router.post('/leads/sync', async (req, res) => {
   } catch (err) {
     res.status(500).json({ error: err.message || 'Failed to sync leads from Meta.' });
   }
-});
+};
+
+router.post('/leads/sync', handleSyncLeads);
+router.post('/api/leads/sync', handleSyncLeads);
+router.post('/leads/sync-cron', handleSyncLeads);
+router.post('/api/leads/sync-cron', handleSyncLeads);
+router.get('/leads/sync-cron', handleSyncLeads);
+router.get('/api/leads/sync-cron', handleSyncLeads);
 
 // GET /forms
 router.get('/forms', async (req, res) => {

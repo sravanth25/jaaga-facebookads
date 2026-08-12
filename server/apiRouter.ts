@@ -456,9 +456,9 @@ apiRouter.get('/leads/export', async (req: Request, res: Response) => {
 });
 
 // -------------------------------------------------------------
-// POST /api/leads/sync (Backfill leads from Meta)
+// POST /api/leads/sync & POST/GET /api/leads/sync-cron
 // -------------------------------------------------------------
-apiRouter.post('/leads/sync', async (req: Request, res: Response) => {
+const handleLeadSync = async (req: Request, res: Response) => {
   try {
     const { pageId } = getMetaConfig();
     if (!pageId) {
@@ -527,7 +527,11 @@ apiRouter.post('/leads/sync', async (req: Request, res: Response) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Failed to sync leads from Meta.' });
   }
-});
+};
+
+apiRouter.post('/leads/sync', handleLeadSync);
+apiRouter.post('/leads/sync-cron', handleLeadSync);
+apiRouter.get('/leads/sync-cron', handleLeadSync);
 
 // -------------------------------------------------------------
 // GET /api/forms
