@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { METRIC_CATALOG, getMetricByKey, PRESET_NAMED_VIEWS } from '../../lib/metrics';
 import { Search, RotateCcw, Save, Check, X, ArrowUp, ArrowDown, MoveVertical } from 'lucide-react';
 
@@ -62,7 +63,7 @@ export const MetricPickerModal: React.FC<MetricPickerModalProps> = ({
     setCurrentSelected(presetMetrics);
   };
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
       <div className="w-full max-w-3xl max-h-[90vh] flex flex-col rounded-2xl bg-white dark:bg-slate-900 shadow-2xl border border-slate-200 dark:border-slate-800 overflow-hidden">
         {/* Header */}
@@ -283,6 +284,7 @@ export const MetricPickerModal: React.FC<MetricPickerModalProps> = ({
           </div>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

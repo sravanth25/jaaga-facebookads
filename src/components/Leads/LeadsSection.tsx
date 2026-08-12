@@ -57,7 +57,7 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
   };
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3.5 sm:p-5 lg:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto w-full">
       {/* Toolbar: Search, Filters, Sync & Export */}
       <div className="flex flex-wrap items-center justify-between gap-4 bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-800 shadow-2xs">
         {/* Search */}

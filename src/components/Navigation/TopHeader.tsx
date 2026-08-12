@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { DateRange, DateRangeType } from '../../types';
-import { Calendar, RefreshCw, SlidersHorizontal, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Calendar, RefreshCw, SlidersHorizontal, CheckCircle2, AlertCircle, Menu, X } from 'lucide-react';
 
 interface TopHeaderProps {
   title: string;
@@ -11,6 +12,7 @@ interface TopHeaderProps {
   isRefreshing?: boolean;
   hasToken?: boolean;
   hasSupabase?: boolean;
+  onToggleMobileMenu?: () => void;
 }
 
 export const TopHeader: React.FC<TopHeaderProps> = ({
@@ -22,6 +24,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   isRefreshing = false,
   hasToken = false,
   hasSupabase = false,
+  onToggleMobileMenu,
 }) => {
   const [showCustomModal, setShowCustomModal] = useState(false);
   const [customSince, setCustomSince] = useState(dateRange.since || '');
@@ -48,10 +51,42 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-30 flex flex-wrap items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 bg-white/90 dark:bg-slate-900/90 px-6 py-3.5 backdrop-blur-md transition-colors">
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-bold tracking-tight text-slate-900 dark:text-white">{title}</h1>
-        <div className="hidden sm:flex items-center gap-2 text-xs">
+    <header className="sticky top-0 z-30 flex flex-col md:flex-row md:items-center justify-between gap-3 border-b border-slate-200 dark:border-slate-800 bg-white/95 dark:bg-slate-900/95 px-4 sm:px-6 py-3 backdrop-blur-md transition-colors w-full">
+      {/* Top row / Left section */}
+      <div className="flex items-center justify-between w-full md:w-auto gap-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          {onToggleMobileMenu && (
+            <button
+              onClick={onToggleMobileMenu}
+              className="md:hidden p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex-shrink-0"
+              aria-label="Toggle Navigation"
+            >
+              <Menu className="h-5 w-5" />
+            </button>
+          )}
+          <h1 className="text-lg sm:text-xl font-bold tracking-tight text-slate-900 dark:text-white truncate">
+            {title}
+          </h1>
+        </div>
+
+        {/* Status Pills on mobile */}
+        <div className="flex sm:hidden items-center gap-1.5 text-[10px]">
+          {hasToken ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 font-semibold text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
+              <CheckCircle2 className="h-3 w-3" /> Live
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 font-semibold text-amber-700 dark:bg-amber-950/60 dark:text-amber-400">
+              <AlertCircle className="h-3 w-3" /> Setup
+            </span>
+          )}
+        </div>
+      </div>
+
+      {/* Right controls section */}
+      <div className="flex items-center gap-2 max-w-full overflow-x-auto scrollbar-none py-0.5 w-full md:w-auto">
+        {/* Status badges for tablet/desktop */}
+        <div className="hidden sm:flex items-center gap-2 text-xs flex-shrink-0 mr-1">
           {hasToken ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
               <CheckCircle2 className="h-3.5 w-3.5" /> Meta Connected
@@ -63,30 +98,29 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           )}
           {hasSupabase && (
             <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-400">
-              <CheckCircle2 className="h-3.5 w-3.5" /> Supabase Active
+              <CheckCircle2 className="h-3.5 w-3.5" /> Supabase
             </span>
           )}
         </div>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-2.5">
         {/* Metric Picker Button */}
         <button
           onClick={onOpenMetricPicker}
-          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 shadow-xs hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors"
+          className="inline-flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors flex-shrink-0"
           title="Customize Columns & Metrics"
         >
           <SlidersHorizontal className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
-          <span>Customize Metrics</span>
+          <span className="hidden sm:inline">Customize Metrics</span>
+          <span className="sm:hidden">Metrics</span>
         </button>
 
         {/* Global Date Range Selector */}
-        <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 p-0.5 text-xs font-medium text-slate-600 dark:text-slate-300">
+        <div className="flex items-center rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 p-0.5 text-xs font-medium text-slate-600 dark:text-slate-300 overflow-x-auto scrollbar-none flex-nowrap flex-shrink-0 max-w-[220px] sm:max-w-none">
           {presets.map((p) => (
             <button
               key={p.type}
               onClick={() => onDateRangeChange({ type: p.type })}
-              className={`rounded-md px-2.5 py-1 transition-all ${
+              className={`rounded-md px-2 sm:px-2.5 py-1 transition-all whitespace-nowrap ${
                 dateRange.type === p.type
                   ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 font-semibold shadow-xs'
                   : 'hover:text-slate-900 dark:hover:text-white'
@@ -97,7 +131,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
           ))}
           <button
             onClick={() => setShowCustomModal(true)}
-            className={`flex items-center gap-1 rounded-md px-2.5 py-1 transition-all ${
+            className={`flex items-center gap-1 rounded-md px-2 sm:px-2.5 py-1 transition-all whitespace-nowrap ${
               dateRange.type === 'custom'
                 ? 'bg-white dark:bg-slate-700 text-blue-600 dark:text-blue-400 font-semibold shadow-xs'
                 : 'hover:text-slate-900 dark:hover:text-white'
@@ -112,7 +146,7 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
         <button
           onClick={onRefresh}
           disabled={isRefreshing}
-          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50"
+          className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors disabled:opacity-50 flex-shrink-0"
           title="Refresh Data"
         >
           <RefreshCw className={`h-4 w-4 ${isRefreshing ? 'animate-spin text-blue-600' : ''}`} />
@@ -120,15 +154,25 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
       </div>
 
       {/* Custom Date Range Modal */}
-      {showCustomModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="w-full max-w-md rounded-xl bg-white dark:bg-slate-800 p-5 shadow-2xl border border-slate-200 dark:border-slate-700">
-            <h3 className="text-base font-semibold text-slate-900 dark:text-white mb-3">
-              Select Custom Date Range
-            </h3>
+      {showCustomModal && createPortal(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 backdrop-blur-xs p-4 overflow-y-auto">
+          <div className="w-full max-w-md my-auto rounded-2xl bg-white dark:bg-slate-800 p-5 sm:p-6 shadow-2xl border border-slate-200 dark:border-slate-700 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                Select Custom Date Range
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowCustomModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
             <form onSubmit={handleCustomSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
                   Start Date (Since)
                 </label>
                 <input
@@ -136,11 +180,11 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                   required
                   value={customSince}
                   onChange={(e) => setCustomSince(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
+                <label className="block text-xs font-semibold text-slate-600 dark:text-slate-300 mb-1">
                   End Date (Until)
                 </label>
                 <input
@@ -148,27 +192,28 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
                   required
                   value={customUntil}
                   onChange={(e) => setCustomUntil(e.target.value)}
-                  className="w-full rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full rounded-xl border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-3.5 py-2 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <div className="flex justify-end gap-2 pt-2">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-700/60">
                 <button
                   type="button"
                   onClick={() => setShowCustomModal(false)}
-                  className="rounded-lg px-4 py-2 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
+                  className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-700"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="rounded-lg bg-blue-600 px-4 py-2 text-xs font-semibold text-white hover:bg-blue-700 shadow-xs"
+                  className="rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white hover:bg-blue-700 shadow-md shadow-blue-500/20"
                 >
                   Apply Range
                 </button>
               </div>
             </form>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </header>
   );

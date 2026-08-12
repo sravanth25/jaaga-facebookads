@@ -16,6 +16,7 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
   });
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
   const [dateRange, setDateRange] = useState<DateRange>({ type: '30d' });
 
@@ -323,10 +324,12 @@ export default function App() {
         onTabChange={setActiveTab}
         isDarkMode={isDarkMode}
         onToggleDarkMode={() => setIsDarkMode(!isDarkMode)}
+        isMobileOpen={isMobileMenuOpen}
+        onCloseMobile={() => setIsMobileMenuOpen(false)}
       />
 
       {/* Main App Workspace */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-y-auto">
+      <div className="flex-1 flex flex-col min-w-0 w-full overflow-y-auto">
         <TopHeader
           title={
             activeTab === 'overview'
@@ -346,6 +349,7 @@ export default function App() {
           isRefreshing={isRefreshing}
           hasToken={settings?.hasToken}
           hasSupabase={settings?.hasSupabase}
+          onToggleMobileMenu={() => setIsMobileMenuOpen((prev) => !prev)}
         />
 
         <main className="flex-1 pb-12">

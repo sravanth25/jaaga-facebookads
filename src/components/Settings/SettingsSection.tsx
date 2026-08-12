@@ -54,7 +54,7 @@ export const SettingsSection: React.FC<SettingsSectionProps> = ({
   };
 
   return (
-    <div className="p-6 space-y-8 max-w-5xl mx-auto">
+    <div className="p-3.5 sm:p-5 lg:p-6 space-y-6 sm:space-y-8 max-w-5xl mx-auto w-full">
       {/* Overview Status Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Meta Marketing API Status */}

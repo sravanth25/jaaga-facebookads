@@ -87,7 +87,7 @@ export const CampaignsSection: React.FC<CampaignsSectionProps> = ({
   });
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="p-3.5 sm:p-5 lg:p-6 space-y-4 sm:space-y-6 max-w-7xl mx-auto w-full">
       {/* Warning banner if permission or API issue */}
       {warning && (
         <div className="flex items-start gap-3 rounded-2xl border border-amber-300 dark:border-amber-800/80 bg-amber-50 dark:bg-amber-950/50 p-4 text-amber-950 dark:text-amber-100 text-xs shadow-xs">
