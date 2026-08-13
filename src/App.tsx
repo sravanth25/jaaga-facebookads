@@ -40,9 +40,11 @@ export default function App() {
   // Leads Data
   const [leads, setLeads] = useState<MetaLead[]>([]);
   const [forms, setForms] = useState<MetaForm[]>([]);
+  const [availableSheets, setAvailableSheets] = useState<string[]>([]);
   const [leadSearch, setLeadSearch] = useState('');
   const [selectedLeadCampaign, setSelectedLeadCampaign] = useState('');
   const [selectedLeadForm, setSelectedLeadForm] = useState('');
+  const [selectedLeadSheet, setSelectedLeadSheet] = useState('');
 
   // Settings Data
   const [settings, setSettings] = useState<ConnectionSettings | null>(null);
@@ -163,18 +165,22 @@ export default function App() {
       if (leadSearch) params.set('search', leadSearch);
       if (selectedLeadCampaign) params.set('campaign', selectedLeadCampaign);
       if (selectedLeadForm) params.set('form', selectedLeadForm);
+      if (selectedLeadSheet) params.set('sheet', selectedLeadSheet);
 
       const res = await fetch(`/api/leads?${params.toString()}`);
       const data = await res.json();
 
       if (!res.ok) throw new Error(data.error || 'Failed to query leads');
       setLeads(data.items || []);
+      if (data.sheets && Array.isArray(data.sheets)) {
+        setAvailableSheets(data.sheets);
+      }
     } catch (err: any) {
       console.error('Leads error:', err);
     } finally {
       setIsLoadingLeads(false);
     }
-  }, [buildDateQuery, leadSearch, selectedLeadCampaign, selectedLeadForm]);
+  }, [buildDateQuery, leadSearch, selectedLeadCampaign, selectedLeadForm, selectedLeadSheet]);
 
   // Load Forms
   const fetchForms = useCallback(async () => {
@@ -381,14 +387,17 @@ export default function App() {
               leads={leads}
               forms={forms}
               campaigns={campaigns}
+              sheets={availableSheets}
               isLoading={isLoadingLeads}
               isSyncing={isSyncingLeads}
               onSyncLeads={handleSyncLeads}
               onSearchChange={setLeadSearch}
               onCampaignFilterChange={setSelectedLeadCampaign}
               onFormFilterChange={setSelectedLeadForm}
+              onSheetFilterChange={setSelectedLeadSheet}
               selectedCampaign={selectedLeadCampaign}
               selectedForm={selectedLeadForm}
+              selectedSheet={selectedLeadSheet}
               searchQuery={leadSearch}
             />
           )}

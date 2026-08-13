@@ -39,6 +39,7 @@ export interface MetaLead {
   adset_name?: string;
   ad_name?: string;
   form_name?: string;
+  sheet_name?: string;
   created_time: string;
   synced_at?: string;
   source?: string;

@@ -178,7 +178,7 @@ async function upsertForm(form) {
   }
 }
 
-async function queryLeads({ campaign, form, search, since, until }) {
+async function queryLeads({ campaign, form, sheet, search, since, until }) {
   const db = getSupabase();
 
   if (db) {
@@ -186,6 +186,7 @@ async function queryLeads({ campaign, form, search, since, until }) {
 
     if (campaign) q = q.eq('campaign_id', campaign);
     if (form) q = q.eq('form_id', form);
+    if (sheet) q = q.eq('sheet_name', sheet);
     if (since) q = q.gte('created_time', `${since}T00:00:00Z`);
     if (until) q = q.lte('created_time', `${until}T23:59:59Z`);
 
@@ -203,6 +204,7 @@ async function queryLeads({ campaign, form, search, since, until }) {
 
   if (campaign) items = items.filter(i => i.campaign_id === campaign);
   if (form) items = items.filter(i => i.form_id === form);
+  if (sheet) items = items.filter(i => i.sheet_name === sheet);
   if (since) items = items.filter(i => new Date(i.created_time) >= new Date(`${since}T00:00:00Z`));
   if (until) items = items.filter(i => new Date(i.created_time) <= new Date(`${until}T23:59:59Z`));
 
@@ -217,6 +219,46 @@ async function queryLeads({ campaign, form, search, since, until }) {
   }
 
   return items.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
+}
+
+async function querySheets() {
+  const set = new Set();
+
+  const parseEntries = (str) => {
+    if (!str) return [];
+    return str.split(',').map((item) => {
+      const trimmed = item.trim();
+      const pipeIdx = trimmed.indexOf('|');
+      if (pipeIdx !== -1) {
+        return trimmed.slice(0, pipeIdx).trim();
+      }
+      return '';
+    }).filter(Boolean);
+  };
+
+  parseEntries(process.env.LEADS_SHEET_CSV_URLS).forEach((lbl) => set.add(lbl));
+  parseEntries(process.env.LEADS_SHEET_CSV_URL).forEach((lbl) => set.add(lbl));
+
+  const db = getSupabase();
+  if (db) {
+    const { data, error } = await db.from('meta_leads').select('sheet_name').not('sheet_name', 'is', null);
+    if (!error && data) {
+      data.forEach((row) => {
+        if (row.sheet_name && row.sheet_name.trim()) {
+          set.add(row.sheet_name.trim());
+        }
+      });
+      return Array.from(set).sort();
+    }
+  }
+
+  Array.from(inMemoryStore.leads.values()).forEach((l) => {
+    if (l.sheet_name && l.sheet_name.trim()) {
+      set.add(l.sheet_name.trim());
+    }
+  });
+
+  return Array.from(set).sort();
 }
 
 async function queryForms() {
@@ -923,10 +965,12 @@ router.get(['/leads', '/api/leads'], async (req, res) => {
     const { since, until } = extractDateParams(req);
     const campaign = req.query.campaign;
     const form = req.query.form;
+    const sheet = req.query.sheet;
     const search = req.query.search;
 
-    const leads = await queryLeads({ campaign, form, search, since, until });
-    res.json({ items: leads, count: leads.length });
+    const leads = await queryLeads({ campaign, form, sheet, search, since, until });
+    const sheets = await querySheets();
+    res.json({ items: leads, count: leads.length, sheets });
   } catch (err) {
     res.status(500).json({ error: err.message || 'Error querying leads' });
   }
@@ -938,9 +982,10 @@ router.get(['/leads/export', '/api/leads/export'], async (req, res) => {
     const { since, until } = extractDateParams(req);
     const campaign = req.query.campaign;
     const form = req.query.form;
+    const sheet = req.query.sheet;
     const search = req.query.search;
 
-    const leads = await queryLeads({ campaign, form, search, since, until });
+    const leads = await queryLeads({ campaign, form, sheet, search, since, until });
 
     const headers = ['Lead ID', 'Full Name', 'Phone', 'Email', 'Campaign ID', 'Form ID', 'Created Time'];
     const rows = leads.map((l) => [
@@ -1025,22 +1070,98 @@ const handleSheetSync = async (req, res) => {
   }
 
   try {
-    const csvUrls = [];
-    const urlsStr = process.env.LEADS_SHEET_CSV_URLS;
-    if (urlsStr) {
-      const list = urlsStr.split(',').map((u) => u.trim()).filter(Boolean);
-      csvUrls.push(...list);
-    }
-    const singleUrl = process.env.LEADS_SHEET_CSV_URL;
-    if (singleUrl && singleUrl.trim()) {
-      const trimmed = singleUrl.trim();
-      if (!csvUrls.includes(trimmed)) {
-        csvUrls.push(trimmed);
+    const csvEntries = [];
+    if (process.env.LEADS_SHEET_PUBHTML_URL) {
+      try {
+        const pubhtmlUrl = process.env.LEADS_SHEET_PUBHTML_URL.trim();
+        if (pubhtmlUrl) {
+          const response = await fetch(pubhtmlUrl);
+          if (response.ok) {
+            const htmlText = await response.text();
+
+            let baseUrl = pubhtmlUrl.split('?')[0].trim();
+            if (baseUrl.endsWith('/pubhtml')) {
+              baseUrl = baseUrl.slice(0, -'/pubhtml'.length) + '/pub';
+            } else {
+              baseUrl = baseUrl.replace(/\/pubhtml\b/, '/pub');
+            }
+
+            const regex = /name:\s*"([^"]+)",\s*pageUrl:\s*"[^"]*?gid=(\d+)"/g;
+            const seenGids = new Set();
+
+            let match;
+            while ((match = regex.exec(htmlText)) !== null) {
+              const tabName = match[1].trim();
+              const gid = match[2].trim();
+              if (gid && !seenGids.has(gid)) {
+                seenGids.add(gid);
+                const csvUrl = `${baseUrl}?gid=${gid}&single=true&output=csv`;
+                csvEntries.push({ label: tabName, url: csvUrl });
+              }
+            }
+
+            if (csvEntries.length === 0) {
+              const altRegex = /name:\s*["']([^"']+)["'][\s\S]*?gid=(\d+)/g;
+              let altMatch;
+              while ((altMatch = altRegex.exec(htmlText)) !== null) {
+                const tabName = altMatch[1].trim();
+                const gid = altMatch[2].trim();
+                if (gid && !seenGids.has(gid)) {
+                  seenGids.add(gid);
+                  const csvUrl = `${baseUrl}?gid=${gid}&single=true&output=csv`;
+                  csvEntries.push({ label: tabName, url: csvUrl });
+                }
+              }
+            }
+          } else {
+            console.warn(`LEADS_SHEET_PUBHTML_URL returned HTTP ${response.status}`);
+          }
+        }
+      } catch (err) {
+        console.error('Error auto-discovering tabs from LEADS_SHEET_PUBHTML_URL:', err);
       }
     }
 
-    if (csvUrls.length === 0) {
-      return res.status(400).json({ error: 'LEADS_SHEET_CSV_URLS or LEADS_SHEET_CSV_URL environment variable is not configured.' });
+    if (csvEntries.length === 0) {
+      const rawItems = [];
+      if (process.env.LEADS_SHEET_CSV_URLS) {
+        rawItems.push(...process.env.LEADS_SHEET_CSV_URLS.split(',').map((s) => s.trim()).filter(Boolean));
+      }
+      if (process.env.LEADS_SHEET_CSV_URL) {
+        rawItems.push(...process.env.LEADS_SHEET_CSV_URL.split(',').map((s) => s.trim()).filter(Boolean));
+      }
+
+      const seenUrls = new Set();
+      for (const item of rawItems) {
+        let label = '';
+        let url = item;
+        const pipeIdx = item.indexOf('|');
+        if (pipeIdx !== -1) {
+          label = item.slice(0, pipeIdx).trim();
+          url = item.slice(pipeIdx + 1).trim();
+        } else {
+          url = item.trim();
+        }
+        if (!url) continue;
+
+        if (!label) {
+          const match = url.match(/[?&]gid=([0-9a-zA-Z_-]+)/) || url.match(/gid=([0-9a-zA-Z_-]+)/);
+          if (match && match[1]) {
+            label = `gid ${match[1]}`;
+          } else {
+            label = `gid unknown`;
+          }
+        }
+
+        if (!seenUrls.has(url)) {
+          seenUrls.add(url);
+          csvEntries.push({ label, url });
+        }
+      }
+    }
+
+    if (csvEntries.length === 0) {
+      return res.status(400).json({ error: 'LEADS_SHEET_PUBHTML_URL, LEADS_SHEET_CSV_URLS or LEADS_SHEET_CSV_URL environment variable is not configured.' });
     }
 
     const parseCsvText = (text) => {
@@ -1092,73 +1213,129 @@ const handleSheetSync = async (req, res) => {
       return { headers, rows };
     };
 
-    const stripPrefix = (val, prefix) => {
+    const cleanPrefix = (val, prefixRegex) => {
       if (!val) return '';
-      const str = String(val).trim();
-      if (str.toLowerCase().startsWith(prefix.toLowerCase())) {
-        return str.substring(prefix.length).trim();
-      }
-      return str;
+      let str = String(val).trim();
+      return str.replace(prefixRegex, '').trim();
     };
 
     const normalizePhone = (raw) => {
       if (!raw) return '';
       let str = String(raw).trim();
-      if (str.toLowerCase().startsWith('p:')) {
-        str = str.substring(2).trim();
-      }
+      str = str.replace(/^p\s*:\s*/i, '').trim();
       let cleaned = str.replace(/\D/g, '');
+      if (!cleaned) return '';
       if (/^0\d{10}$/.test(cleaned)) cleaned = cleaned.substring(1);
       if (/^\d{10}$/.test(cleaned)) cleaned = '91' + cleaned;
       return cleaned;
     };
 
     const crypto = await import('crypto');
-    const generateId = (phone, email, dateStr) => {
-      const key = `${(phone || '').trim().toLowerCase()}|${(email || '').trim().toLowerCase()}|${(dateStr || '').trim().toLowerCase()}`;
+    const generateHashId = (sheetName, phone, fullName, dateStr) => {
+      const normSheet = (sheetName || '').trim().toLowerCase();
+      const normPhone = (phone || '').trim().toLowerCase();
+      const normName = (fullName || '').trim().toLowerCase();
+      const normDate = (dateStr || '').trim().toLowerCase();
+      const key = `${normSheet}|${normPhone}|${normName}|${normDate}`;
       const hash = crypto.createHash('sha256').update(key).digest('hex').substring(0, 24);
       return `sheet_${hash}`;
+    };
+
+    const FIELD_ALIASES = {
+      id: ['id', 'lead_id', 'leadid'],
+      full_name: ['full_name', 'full name', 'fullname', 'name'],
+      phone: ['phone', 'phone_number', 'phonenumber', 'mobile', 'contact'],
+      email: ['email', 'e-mail'],
+      campaign_id: ['campaign_id', 'campaignid'],
+      campaign_name: ['campaign_name', 'campaignname', 'campaign'],
+      form_id: ['form_id', 'formid'],
+      form_name: ['form_name', 'formname', 'form'],
+      created_time: ['created_time', 'createdtime', 'created', 'date', 'submission date', 'timestamp'],
+      ad_id: ['ad_id', 'adid'],
+      ad_name: ['ad_name', 'adname', 'ad'],
+      adset_id: ['adset_id', 'adsetid'],
+      adset_name: ['adset_name', 'adsetname', 'adset'],
+      state: ['state'],
+      city: ['city'],
+      lead_status: ['lead_status', 'leadstatus', 'status'],
+      remarks: ['remarks', 'notes', 'remark'],
+      platform: ['platform'],
+      is_organic: ['is_organic', 'isorganic'],
+    };
+
+    const findColIndices = (headers, aliases) => {
+      const normAliases = aliases.map((a) => a.trim().toLowerCase());
+      const indices = [];
+      headers.forEach((h, idx) => {
+        const normH = h.trim().toLowerCase();
+        if (normAliases.includes(normH)) {
+          indices.push(idx);
+        }
+      });
+      return indices;
+    };
+
+    const getColValue = (row, indices) => {
+      for (const idx of indices) {
+        if (idx >= 0 && idx < row.length && row[idx] !== undefined && row[idx] !== null) {
+          const v = String(row[idx]).trim();
+          if (v) return v;
+        }
+      }
+      return '';
     };
 
     const leadsMap = new Map();
     let skipped = 0;
     const perSheet = [];
 
-    for (const url of csvUrls) {
+    for (const entry of csvEntries) {
       let sheetCount = 0;
+      const sheetLabel = entry.label;
+
       try {
-        const response = await fetch(url);
+        const response = await fetch(entry.url);
         if (!response.ok) {
-          console.warn(`Failed to fetch CSV from URL ${url} (HTTP ${response.status})`);
-          perSheet.push({ url, count: 0 });
+          console.warn(`Failed to fetch CSV from URL ${entry.url} (HTTP ${response.status})`);
+          perSheet.push({ sheet_name: sheetLabel, count: 0 });
           continue;
         }
 
-        const csvText = await response.text();
+        // Decode UTF-8 cleanly
+        const buffer = await response.arrayBuffer();
+        const decoder = new TextDecoder('utf-8');
+        let csvText = decoder.decode(buffer);
+        if (csvText.startsWith('\uFEFF')) {
+          csvText = csvText.slice(1);
+        }
+
         const { headers, rows } = parseCsvText(csvText);
 
         if (headers.length === 0 || rows.length === 0) {
-          perSheet.push({ url, count: 0 });
+          perSheet.push({ sheet_name: sheetLabel, count: 0 });
           continue;
         }
 
-        const colIndexMap = {};
-        headers.forEach((h, idx) => {
-          if (h) {
-            const key = h.trim().toLowerCase().replace(/[\s_]+/g, '');
-            colIndexMap[key] = idx;
-          }
-        });
-
-        const getCol = (row, ...keys) => {
-          for (const k of keys) {
-            const normK = k.trim().toLowerCase().replace(/[\s_]+/g, '');
-            const idx = colIndexMap[normK];
-            if (idx !== undefined && idx < row.length && row[idx] !== undefined && row[idx] !== null) {
-              return row[idx].trim();
-            }
-          }
-          return '';
+        const colIndices = {
+          id: findColIndices(headers, FIELD_ALIASES.id),
+          full_name: findColIndices(headers, FIELD_ALIASES.full_name),
+          phone: findColIndices(headers, FIELD_ALIASES.phone),
+          email: findColIndices(headers, FIELD_ALIASES.email),
+          campaign_id: findColIndices(headers, FIELD_ALIASES.campaign_id),
+          campaign_name: findColIndices(headers, FIELD_ALIASES.campaign_name),
+          form_id: findColIndices(headers, FIELD_ALIASES.form_id),
+          form_name: findColIndices(headers, FIELD_ALIASES.form_name),
+          created_time: findColIndices(headers, FIELD_ALIASES.created_time),
+          ad_id: findColIndices(headers, FIELD_ALIASES.ad_id),
+          ad_name: findColIndices(headers, FIELD_ALIASES.ad_name),
+          adset_id: findColIndices(headers, FIELD_ALIASES.adset_id),
+          adset_name: findColIndices(headers, FIELD_ALIASES.adset_name),
+          state: findColIndices(headers, FIELD_ALIASES.state),
+          city: findColIndices(headers, FIELD_ALIASES.city),
+          lead_status: findColIndices(headers, FIELD_ALIASES.lead_status),
+          remarks: findColIndices(headers, FIELD_ALIASES.remarks),
+          platform: findColIndices(headers, FIELD_ALIASES.platform),
+          is_organic: findColIndices(headers, FIELD_ALIASES.is_organic),
         };
 
         for (const row of rows) {
@@ -1167,37 +1344,38 @@ const handleSheetSync = async (req, res) => {
             continue;
           }
 
-          const rawId = getCol(row, 'id');
-          const rawCreatedTime = getCol(row, 'created_time', 'createdtime', 'date', 'timestamp');
-          const rawAdId = getCol(row, 'ad_id', 'adid');
-          const adName = getCol(row, 'ad_name', 'adname');
-          const rawAdsetId = getCol(row, 'adset_id', 'adsetid');
-          const adsetName = getCol(row, 'adset_name', 'adsetname');
-          const rawCampaignId = getCol(row, 'campaign_id', 'campaignid');
-          const campaignName = getCol(row, 'campaign_name', 'campaignname');
-          const rawFormId = getCol(row, 'form_id', 'formid');
-          const formName = getCol(row, 'form_name', 'formname');
-          const isOrganic = getCol(row, 'is_organic', 'isorganic');
-          const platform = getCol(row, 'platform');
-          const fullName = getCol(row, 'full_name', 'fullname', 'name');
-          const rawPhone = getCol(row, 'phone', 'phonenumber', 'mobile', 'contact');
-          const rawEmail = getCol(row, 'email', 'e-mail');
-          const state = getCol(row, 'state');
-          const city = getCol(row, 'city');
-          const leadStatus = getCol(row, 'lead_status', 'leadstatus', 'status');
-          const remarks = getCol(row, 'remarks');
+          const rawId = getColValue(row, colIndices.id);
+          const rawFullName = getColValue(row, colIndices.full_name);
+          const rawPhone = getColValue(row, colIndices.phone);
+          const rawEmail = getColValue(row, colIndices.email);
+          const rawCampaignId = getColValue(row, colIndices.campaign_id);
+          const campaignName = getColValue(row, colIndices.campaign_name);
+          const rawFormId = getColValue(row, colIndices.form_id);
+          const formName = getColValue(row, colIndices.form_name);
+          const rawCreatedTime = getColValue(row, colIndices.created_time);
+          const rawAdId = getColValue(row, colIndices.ad_id);
+          const adName = getColValue(row, colIndices.ad_name);
+          const rawAdsetId = getColValue(row, colIndices.adset_id);
+          const adsetName = getColValue(row, colIndices.adset_name);
+          const state = getColValue(row, colIndices.state);
+          const city = getColValue(row, colIndices.city);
+          const leadStatus = getColValue(row, colIndices.lead_status);
+          const remarks = getColValue(row, colIndices.remarks);
+          const platform = getColValue(row, colIndices.platform);
+          const isOrganic = getColValue(row, colIndices.is_organic);
 
-          const cleanId = stripPrefix(rawId, 'l:');
+          // Clean prefixes
+          const cleanLeadId = cleanPrefix(rawId, /^l\s*:\s*/i);
           const phone = normalizePhone(rawPhone);
-          const campaignId = stripPrefix(rawCampaignId, 'c:');
-          const adId = stripPrefix(rawAdId, 'ag:');
-          const adsetId = stripPrefix(rawAdsetId, 'as:');
-          const formId = stripPrefix(rawFormId, 'f:');
-          const email = rawEmail ? rawEmail.trim() : '';
+          const fullName = rawFullName.trim();
+          const email = rawEmail.trim();
+          const campaignId = cleanPrefix(rawCampaignId, /^c\s*:\s*/i);
+          const formId = cleanPrefix(rawFormId, /^f\s*:\s*/i);
+          const adId = cleanPrefix(rawAdId, /^ag\s*:\s*/i);
+          const adsetId = cleanPrefix(rawAdsetId, /^as\s*:\s*/i);
 
-          const finalLeadId = cleanId || generateId(phone, email, rawCreatedTime);
-
-          if (!fullName && !phone && !email && !cleanId) {
+          // SKIP any row with neither a phone NOR a name. Do NOT create "Anonymous" rows.
+          if (!fullName && !phone) {
             skipped++;
             continue;
           }
@@ -1207,6 +1385,8 @@ const handleSheetSync = async (req, res) => {
             const parsed = new Date(rawCreatedTime);
             if (!isNaN(parsed.getTime())) createdTime = parsed.toISOString();
           }
+
+          const finalLeadId = cleanLeadId || generateHashId(sheetLabel, phone, fullName, rawCreatedTime || createdTime);
 
           const fieldData = [];
           if (fullName) fieldData.push({ name: 'full_name', values: [fullName] });
@@ -1222,13 +1402,14 @@ const handleSheetSync = async (req, res) => {
           if (remarks) fieldData.push({ name: 'Remarks', values: [remarks] });
           if (platform) fieldData.push({ name: 'platform', values: [platform] });
           if (isOrganic) fieldData.push({ name: 'is_organic', values: [isOrganic] });
+          if (sheetLabel) fieldData.push({ name: 'sheet_name', values: [sheetLabel] });
           fieldData.push({ name: 'source', values: ['sheet'] });
 
           leadsMap.set(finalLeadId, {
             id: finalLeadId,
-            full_name: fullName || 'Anonymous',
-            phone: phone || '—',
-            email: email || '—',
+            full_name: fullName,
+            phone: phone,
+            email: email,
             campaign_id: campaignId || null,
             campaign_name: campaignName || null,
             adset_id: adsetId || null,
@@ -1237,6 +1418,7 @@ const handleSheetSync = async (req, res) => {
             ad_name: adName || null,
             form_id: formId || null,
             form_name: formName || null,
+            sheet_name: sheetLabel,
             field_data: fieldData,
             created_time: createdTime,
             source: 'sheet',
@@ -1245,10 +1427,10 @@ const handleSheetSync = async (req, res) => {
           sheetCount++;
         }
 
-        perSheet.push({ url, count: sheetCount });
+        perSheet.push({ sheet_name: sheetLabel, count: sheetCount });
       } catch (err) {
-        console.error(`Error processing sheet URL ${url}:`, err);
-        perSheet.push({ url, count: 0 });
+        console.error(`Error processing sheet URL ${entry.url}:`, err);
+        perSheet.push({ sheet_name: sheetLabel, count: 0 });
       }
     }
 
@@ -1264,14 +1446,16 @@ const handleSheetSync = async (req, res) => {
         const batch = leadsToUpsert.slice(i, i + BATCH_SIZE);
         const payload = batch.map((l) => ({
           id: l.id,
-          full_name: l.full_name || 'Anonymous',
-          phone: l.phone || '—',
-          email: l.email || '—',
+          full_name: l.full_name || '',
+          phone: l.phone || '',
+          email: l.email || '',
           field_data: l.field_data || [],
           campaign_id: l.campaign_id || null,
+          campaign_name: l.campaign_name || null,
           adset_id: l.adset_id || null,
           ad_id: l.ad_id || null,
           form_id: l.form_id || null,
+          sheet_name: l.sheet_name || null,
           created_time: l.created_time || new Date().toISOString(),
           synced_at: l.synced_at || new Date().toISOString(),
         }));
@@ -1365,7 +1549,7 @@ router.get(['/settings', '/api/settings'], (req, res) => {
       hasToken: !!process.env.META_ACCESS_TOKEN,
       hasSupabase: !!process.env.SUPABASE_URL,
       cronSecret: process.env.CRON_SECRET || '',
-      hasSheetUrl: !!process.env.LEADS_SHEET_CSV_URL,
+      hasSheetUrl: !!(process.env.LEADS_SHEET_PUBHTML_URL || process.env.LEADS_SHEET_CSV_URLS || process.env.LEADS_SHEET_CSV_URL),
       appUrl,
     });
   } catch (err) {

@@ -7,12 +7,16 @@ create table if not exists meta_leads (
   email text,
   field_data jsonb,                       -- all form answers
   campaign_id text,
+  campaign_name text,
   adset_id text,
   ad_id text,
   form_id text,
+  sheet_name text,
   created_time timestamptz,
   synced_at timestamptz default now()
 );
+
+alter table meta_leads add column if not exists campaign_name text;
 
 create table if not exists meta_forms (
   id text primary key,

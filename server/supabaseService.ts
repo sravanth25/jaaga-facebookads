@@ -1,5 +1,6 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { MetaLead, MetaForm, MetricView } from '../src/types';
+import { getCsvEntries } from './sheetService';
 
 let supabaseClient: SupabaseClient | null = null;
 
@@ -65,14 +66,16 @@ export async function batchUpsertLeads(leads: MetaLead[]): Promise<{ imported: n
       const batch = leads.slice(i, i + BATCH_SIZE);
       const payload = batch.map((l) => ({
         id: l.id,
-        full_name: l.full_name || 'Anonymous',
-        phone: l.phone || '—',
-        email: l.email || '—',
+        full_name: l.full_name || '',
+        phone: l.phone || '',
+        email: l.email || '',
         field_data: l.field_data || [],
         campaign_id: l.campaign_id || null,
+        campaign_name: l.campaign_name || null,
         adset_id: l.adset_id || null,
         ad_id: l.ad_id || null,
         form_id: l.form_id || null,
+        sheet_name: l.sheet_name || null,
         created_time: l.created_time || new Date().toISOString(),
         synced_at: l.synced_at || new Date().toISOString(),
       }));
@@ -183,12 +186,14 @@ export async function upsertForm(form: MetaForm): Promise<void> {
 export async function queryLeads({
   campaign,
   form,
+  sheet,
   search,
   since,
   until,
 }: {
   campaign?: string;
   form?: string;
+  sheet?: string;
   search?: string;
   since?: string;
   until?: string;
@@ -200,6 +205,7 @@ export async function queryLeads({
 
     if (campaign) q = q.eq('campaign_id', campaign);
     if (form) q = q.eq('form_id', form);
+    if (sheet) q = q.eq('sheet_name', sheet);
     if (since) q = q.gte('created_time', `${since}T00:00:00Z`);
     if (until) q = q.lte('created_time', `${until}T23:59:59Z`);
 
@@ -219,6 +225,7 @@ export async function queryLeads({
 
   if (campaign) items = items.filter(i => i.campaign_id === campaign);
   if (form) items = items.filter(i => i.form_id === form);
+  if (sheet) items = items.filter(i => i.sheet_name === sheet);
   if (since) items = items.filter(i => new Date(i.created_time) >= new Date(`${since}T00:00:00Z`));
   if (until) items = items.filter(i => new Date(i.created_time) <= new Date(`${until}T23:59:59Z`));
 
@@ -233,6 +240,49 @@ export async function queryLeads({
   }
 
   return items.sort((a, b) => new Date(b.created_time).getTime() - new Date(a.created_time).getTime());
+}
+
+/**
+ * Get distinct sheet names
+ */
+export async function querySheets(): Promise<string[]> {
+  const set = new Set<string>();
+
+  try {
+    const entries = await getCsvEntries();
+    entries.forEach((e) => {
+      if (e.label && e.label.trim()) {
+        set.add(e.label.trim());
+      }
+    });
+  } catch (err) {
+    // ignore
+  }
+
+  const db = getSupabase();
+  if (db) {
+    const { data, error } = await db
+      .from('meta_leads')
+      .select('sheet_name')
+      .not('sheet_name', 'is', null);
+
+    if (!error && data) {
+      data.forEach((row: any) => {
+        if (row.sheet_name && row.sheet_name.trim()) {
+          set.add(row.sheet_name.trim());
+        }
+      });
+      return Array.from(set).sort();
+    }
+  }
+
+  Array.from(inMemoryStore.leads.values()).forEach((l) => {
+    if (l.sheet_name && l.sheet_name.trim()) {
+      set.add(l.sheet_name.trim());
+    }
+  });
+
+  return Array.from(set).sort();
 }
 
 /**

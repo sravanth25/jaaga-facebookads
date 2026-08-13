@@ -15,6 +15,7 @@ import {
 import {
   queryLeads,
   queryForms,
+  querySheets,
   upsertLead,
   upsertForm,
   getMetricView,
@@ -462,17 +463,21 @@ apiRouter.get('/leads', async (req: Request, res: Response) => {
     const { since, until } = extractDateParams(req);
     const campaign = req.query.campaign as string;
     const form = req.query.form as string;
+    const sheet = req.query.sheet as string;
     const search = req.query.search as string;
 
     const leads = await queryLeads({
       campaign,
       form,
+      sheet,
       search,
       since,
       until,
     });
 
-    res.json({ items: leads, count: leads.length });
+    const sheets = await querySheets();
+
+    res.json({ items: leads, count: leads.length, sheets });
   } catch (err: any) {
     res.status(500).json({ error: err.message || 'Error querying leads' });
   }
@@ -486,11 +491,13 @@ apiRouter.get('/leads/export', async (req: Request, res: Response) => {
     const { since, until } = extractDateParams(req);
     const campaign = req.query.campaign as string;
     const form = req.query.form as string;
+    const sheet = req.query.sheet as string;
     const search = req.query.search as string;
 
     const leads = await queryLeads({
       campaign,
       form,
+      sheet,
       search,
       since,
       until,
@@ -652,7 +659,7 @@ apiRouter.get('/settings', (req: Request, res: Response) => {
     hasToken: !!process.env.META_ACCESS_TOKEN,
     hasSupabase: !!process.env.SUPABASE_URL,
     cronSecret: process.env.CRON_SECRET || '',
-    hasSheetUrl: !!process.env.LEADS_SHEET_CSV_URL,
+    hasSheetUrl: !!(process.env.LEADS_SHEET_PUBHTML_URL || process.env.LEADS_SHEET_CSV_URLS || process.env.LEADS_SHEET_CSV_URL),
     appUrl,
   });
 });

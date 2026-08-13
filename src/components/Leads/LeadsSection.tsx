@@ -21,14 +21,17 @@ interface LeadsSectionProps {
   leads: MetaLead[];
   forms: MetaForm[];
   campaigns: MetaCampaign[];
+  sheets?: string[];
   isLoading: boolean;
   isSyncing: boolean;
   onSyncLeads: () => void;
   onSearchChange: (search: string) => void;
   onCampaignFilterChange: (campaignId: string) => void;
   onFormFilterChange: (formId: string) => void;
+  onSheetFilterChange?: (sheet: string) => void;
   selectedCampaign: string;
   selectedForm: string;
+  selectedSheet?: string;
   searchQuery: string;
 }
 
@@ -36,14 +39,17 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
   leads,
   forms,
   campaigns,
+  sheets = [],
   isLoading,
   isSyncing,
   onSyncLeads,
   onSearchChange,
   onCampaignFilterChange,
   onFormFilterChange,
+  onSheetFilterChange,
   selectedCampaign,
   selectedForm,
+  selectedSheet = '',
   searchQuery,
 }) => {
   const [activeLeadDrawer, setActiveLeadDrawer] = useState<MetaLead | null>(null);
@@ -57,6 +63,7 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
     const params = new URLSearchParams();
     if (selectedCampaign) params.set('campaign', selectedCampaign);
     if (selectedForm) params.set('form', selectedForm);
+    if (selectedSheet) params.set('sheet', selectedSheet);
     if (searchQuery) params.set('search', searchQuery);
 
     window.open(`/api/leads/export?${params.toString()}`, '_blank');
@@ -88,9 +95,13 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
           text: data.error || 'Failed to sync leads from Google Sheet.',
         });
       } else {
+        let perSheetSummary = '';
+        if (data.perSheet && Array.isArray(data.perSheet) && data.perSheet.length > 0) {
+          perSheetSummary = ' [' + data.perSheet.map((s: any) => `${s.sheet_name}: ${s.count}`).join(', ') + ']';
+        }
         setSheetSyncMessage({
           type: 'success',
-          text: `Sheet Sync Result: ${data.imported ?? 0} imported, ${data.updated ?? 0} updated, ${data.skipped ?? 0} skipped (Total: ${data.total ?? 0}).`,
+          text: `Sheet Sync Result: ${data.imported ?? 0} imported, ${data.skipped ?? 0} skipped (Total: ${data.total ?? 0}).${perSheetSummary}`,
         });
         if (onSyncLeads) {
           onSyncLeads();
@@ -153,6 +164,23 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
               {forms.map((f) => (
                 <option key={f.id} value={f.id}>
                   {f.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Sheet Filter */}
+          <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 px-2.5 py-1.5 text-xs">
+            <FileSpreadsheet className="h-3.5 w-3.5 text-slate-400" />
+            <select
+              value={selectedSheet}
+              onChange={(e) => onSheetFilterChange && onSheetFilterChange(e.target.value)}
+              className="bg-transparent text-slate-800 dark:text-slate-200 focus:outline-none max-w-[150px] truncate"
+            >
+              <option value="">Select Sheet</option>
+              {sheets.map((s) => (
+                <option key={s} value={s}>
+                  {s}
                 </option>
               ))}
             </select>
@@ -259,7 +287,7 @@ export const LeadsSection: React.FC<LeadsSectionProps> = ({
                         <span>{lead.full_name || 'Anonymous'}</span>
                         {lead.source === 'sheet' && (
                           <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 border border-blue-200/80 dark:border-blue-800">
-                            Sheet
+                            {lead.sheet_name || 'Sheet'}
                           </span>
                         )}
                       </div>
