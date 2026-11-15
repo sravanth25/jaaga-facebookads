@@ -1,5 +1,5 @@
 import React from "react";
-import { AbsoluteFill, Composition, Sequence, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Audio, Composition, Sequence, staticFile, useCurrentFrame } from "remotion";
 import { lerp } from "./lib";
 import { S01, S02, S03, S04, S05, S06, S07, S08, S09, S10, S11, S12, S13, S14, S16, S17, S18 } from "./scenes";
 
@@ -43,6 +43,8 @@ export const LankaDiwali: React.FC = () => {
   let start = 0;
   return (
     <AbsoluteFill style={{ backgroundColor: "#000" }}>
+      {/* Hindi voiceover (ElevenLabs), lines pre-aligned to the shots */}
+      <Audio src={staticFile("voiceover-hi.mp3")} />
       {SHOTS.map((s, i) => {
         const from = start;
         start += s.dur - XF;
