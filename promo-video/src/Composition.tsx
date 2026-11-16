@@ -1,6 +1,8 @@
 import React from "react";
 import {
   AbsoluteFill,
+  Audio,
+  staticFile,
   Composition,
   Easing,
   interpolate,
@@ -475,6 +477,7 @@ export const JaagaPromo: React.FC = () => {
   let from = 0;
   return (
     <AbsoluteFill style={{ backgroundColor: WHITE }}>
+      <Audio src={staticFile("jaaga-music.wav")} volume={0.8} />
       {order.map(([key, C]) => {
         const seq = (
           <Sequence key={key} from={from} durationInFrames={SCENES[key]} name={key}>
