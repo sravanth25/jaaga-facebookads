@@ -2,6 +2,7 @@ import React from "react";
 import {
   AbsoluteFill,
   Audio,
+  Img,
   staticFile,
   Composition,
   Easing,
@@ -73,30 +74,11 @@ const Rise: React.FC<{ delay?: number; children: React.ReactNode; style?: React.
   );
 };
 
-const Logo: React.FC<{ size: number; color?: string; bg?: string }> = ({
-  size,
-  color = NAVY,
-  bg = WHITE,
-}) => (
-  <div style={{ display: "flex", alignItems: "center", gap: size * 0.3 }}>
-    <svg width={size} height={size} viewBox="0 0 100 100">
-      <path
-        d="M50 4 C28 4 12 20 12 41 C12 67 50 96 50 96 C50 96 88 67 88 41 C88 20 72 4 50 4 Z"
-        fill={color}
-      />
-      <circle cx="50" cy="40" r="15" fill={bg} />
-    </svg>
-    <div
-      style={{
-        fontSize: size * 0.9,
-        fontWeight: 800,
-        color,
-        letterSpacing: -2,
-      }}
-    >
-      Jaaga
-    </div>
-  </div>
+const Logo: React.FC<{ width: number; white?: boolean }> = ({ width, white = false }) => (
+  <Img
+    src={staticFile(white ? "jaaga-logo-white.png" : "jaaga-logo.png")}
+    style={{ width, height: "auto", display: "block" }}
+  />
 );
 
 const SceneTag: React.FC<{ n: string; label: string; delay?: number }> = ({ n, label, delay = 0 }) => (
@@ -160,7 +142,7 @@ const Intro: React.FC = () => {
           />
         ))}
         <div style={{ transform: `scale(${logo})` }}>
-          <Logo size={190} />
+          <Logo width={900} />
         </div>
         <Rise delay={30} style={{ marginTop: 40 }}>
           <div style={{ fontSize: 56, color: NAVY, fontWeight: 500, textAlign: "center" }}>
@@ -432,7 +414,7 @@ const Outro: React.FC = () => {
     <SceneFade duration={SCENES.outro} bg={NAVY}>
       <AbsoluteFill style={{ alignItems: "center", justifyContent: "center" }}>
         <Rise>
-          <Logo size={150} color={WHITE} bg={NAVY} />
+          <Logo width={720} white />
         </Rise>
         <Rise delay={14} style={{ marginTop: 36 }}>
           <div style={{ fontSize: 64, color: WHITE, fontWeight: 600, textAlign: "center" }}>
